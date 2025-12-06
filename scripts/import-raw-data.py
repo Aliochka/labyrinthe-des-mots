@@ -116,7 +116,7 @@ def filter_french_synsets() -> Tuple[Set[str], Dict[str, object]]:
     Returns:
         Tuple (set des IDs synsets retenus, dict ID -> synset objet)
     """
-    valid_pos = {"n", "v", "a", "s"}
+    valid_pos = {"n", "v", "a", "s", "r"}
     french_synsets = set()
     synset_objects = {}
 
@@ -244,57 +244,90 @@ def export_relations(
     french_synsets: Set[str], synset_objects: Dict[str, object], output_dir: str
 ) -> int:
     """
-    Exporte le fichier relations.tab.
+    Exporte le fichier relations.tab avec un maximum de relations WordNet.
 
-    Args:
-        french_synsets: Set des IDs de synsets français
-        synset_objects: Dict ID -> synset objet
-        output_dir: Dossier de sortie
-
-    Returns:
-        Nombre de relations exportées
+    On inclut :
+      - relations de synset -> synset (hypernyms, meronyms, etc.)
+      - relations via les lemmes (antonyms, dérivations, pertainyms)
     """
+
     output_file = os.path.join(output_dir, "relations.tab")
 
     print(f"📝 Export des relations vers {output_file}...")
 
     # Set pour éviter les doublons de relations
-    relations_set = set()
+    relations_set: Set[Tuple[str, str, str]] = set()
+
+    # 1) Relations directement disponibles sur les synsets
+    synset_relation_methods = [
+        ("HYPERNYM", "hypernyms"),
+        ("HYPONYM", "hyponyms"),
+        ("INSTANCE_HYPERNYM", "instance_hypernyms"),
+        ("INSTANCE_HYPONYM", "instance_hyponyms"),
+        ("MEMBER_HOLONYM", "member_holonyms"),
+        ("PART_HOLONYM", "part_holonyms"),
+        ("SUBSTANCE_HOLONYM", "substance_holonyms"),
+        ("MEMBER_MERONYM", "member_meronyms"),
+        ("PART_MERONYM", "part_meronyms"),
+        ("SUBSTANCE_MERONYM", "substance_meronyms"),
+        ("ALSO_SEE", "also_sees"),
+        ("SIMILAR_TO", "similar_tos"),
+        ("ATTRIBUTE", "attributes"),
+        ("ENTAILMENT", "entailments"),
+        ("CAUSES", "causes"),
+        ("VERB_GROUP", "verb_groups"),
+        ("TOPIC_DOMAIN", "topic_domains"),
+        ("REGION_DOMAIN", "region_domains"),
+        ("USAGE_DOMAIN", "usage_domains"),
+    ]
 
     for synset_id in french_synsets:
         synset = synset_objects[synset_id]
 
-        # HYPERNYMS
-        try:
-            for hypernym in synset.hypernyms():
-                target_id = get_synset_id(hypernym)
-                if target_id in french_synsets:
-                    relations_set.add((synset_id, "HYPERNYM", target_id))
-        except:
-            pass
+        # Relations synset -> synset
+        for rel_label, method_name in synset_relation_methods:
+            try:
+                method = getattr(synset, method_name, None)
+                if method is None:
+                    continue
+                for target_synset in method():
+                    target_id = get_synset_id(target_synset)
+                    # On ne garde que les liens entre synsets qui ont du français
+                    if target_id in french_synsets:
+                        relations_set.add((synset_id, rel_label, target_id))
+            except Exception:
+                # On ne veut pas crasher l'export sur un synset chelou
+                continue
 
-        # HYPONYMS
-        try:
-            for hyponym in synset.hyponyms():
-                target_id = get_synset_id(hyponym)
-                if target_id in french_synsets:
-                    relations_set.add((synset_id, "HYPONYM", target_id))
-        except:
-            pass
-
-        # ANTONYMS (via les lemmas)
+        # 2) Relations via les lemmes (antonymie, dérivation, pertainym)
         try:
             for lemma in synset.lemmas():
+                # ANTONYMS (comme tu le faisais déjà)
                 for antonym in lemma.antonyms():
                     target_synset = antonym.synset()
                     target_id = get_synset_id(target_synset)
                     if target_id in french_synsets:
                         relations_set.add((synset_id, "ANTONYM", target_id))
-        except:
-            pass
+
+                # DÉRIVATION (nom <-> verbe <-> adjectif, etc.)
+                for der in lemma.derivationally_related_forms():
+                    target_synset = der.synset()
+                    target_id = get_synset_id(target_synset)
+                    if target_id in french_synsets:
+                        relations_set.add((synset_id, "DERIVATION", target_id))
+
+                # PERTAINYM (souvent adj -> nom de base)
+                if hasattr(lemma, "pertainyms"):
+                    for pert in lemma.pertainyms():
+                        target_synset = pert.synset()
+                        target_id = get_synset_id(target_synset)
+                        if target_id in french_synsets:
+                            relations_set.add((synset_id, "PERTAINYM", target_id))
+        except Exception:
+            continue
 
     # Écrire les relations triées
-    relation_counts = defaultdict(int)
+    relation_counts: Dict[str, int] = defaultdict(int)
 
     with open(output_file, "w", encoding="utf-8") as f:
         # En-tête

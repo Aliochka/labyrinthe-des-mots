@@ -1,334 +1,293 @@
 // src/App.tsx
-import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useState } from 'react';
 import './App.css';
 
-import { ControlPanel } from './components/ui/ControlPanel';
-import { Graph3DView } from './visualization/Graph3DView';
+import { SimpleLemmaGraph } from './components/lemma/SimpleLemmaGraph';
+import type { LemmaNode } from './types/lemma';
 
-import { loadWordnetData, type WordnetData } from './wordnet/loadData';
-import {
-  expandFromWord,
-  findPathBetweenWords,
-  type ExpandFromWordResult,
-  type FindPathBetweenWordsResult,
-  type GraphSlice
-} from './wordnet/semantic-api';
-
-// Fonction pour fusionner deux graphiques
-function mergeGraphs(graph1: GraphSlice, graph2: GraphSlice): GraphSlice {
-  const nodeMap = new Map();
-  const edgeSet = new Set();
-
-  // Ajouter tous les nœuds de graph1
-  graph1.nodes.forEach(node => {
-    nodeMap.set(node.id, node);
-  });
-
-  // Ajouter tous les nœuds de graph2 (sans doublons)
-  graph2.nodes.forEach(node => {
-    if (!nodeMap.has(node.id)) {
-      nodeMap.set(node.id, node);
-    }
-  });
-
-  // Ajouter toutes les arêtes de graph1
-  graph1.edges.forEach(edge => {
-    const edgeKey = `${edge.source}-${edge.target}-${edge.relation}`;
-    edgeSet.add(edgeKey);
-  });
-
-  // Ajouter toutes les arêtes de graph2 (sans doublons)
-  graph2.edges.forEach(edge => {
-    const edgeKey = `${edge.source}-${edge.target}-${edge.relation}`;
-    edgeSet.add(edgeKey);
-  });
-
-  // Reconstruire les arrays
-  const mergedNodes = Array.from(nodeMap.values());
-  const mergedEdges = [];
-
-  // Reconstruire les edges depuis le Set
-  graph1.edges.forEach(edge => mergedEdges.push(edge));
-  graph2.edges.forEach(edge => {
-    const edgeKey = `${edge.source}-${edge.target}-${edge.relation}`;
-    const alreadyExists = graph1.edges.some(e1 =>
-      e1.source === edge.source && e1.target === edge.target && e1.relation === edge.relation
-    );
-    if (!alreadyExists) {
-      mergedEdges.push(edge);
-    }
-  });
-
-  return {
-    centerId: graph1.centerId, // Garder le centre original
-    nodes: mergedNodes,
-    edges: mergedEdges
-  };
-}
-
+// Nouveau composant moderne utilisant le système lemma avec design plein écran
 function App() {
+  const [isInitialized, setIsInitialized] = useState(false);
+  const [selectedLemma, setSelectedLemma] = useState<LemmaNode | null>(null);
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentQuery, setCurrentQuery] = useState('');
+  const [graphKey, setGraphKey] = useState(0); // Pour forcer le re-render du graphe
 
-  // Nettoyer le localStorage au démarrage pour une session fraîche
-  localStorage.removeItem('expandFirst');
-  localStorage.removeItem('highlightNodeIds');
+  // Mots aléatoires pour démarrer
+  const randomWords = [
+    'entité',
+    'chat',
+    'animal',
+    'maison',
+    'vie',
+    'temps',
+    'eau',
+    'feu',
+    'terre',
+    'air',
+    'joie',
+    'tristesse',
+    'amour',
+    'paix',
+    'liberté'
+  ];
 
-  // Version simplifiée avec refs pour éviter les re-renders
-  const firstWordRef = useRef<string | null>(null);
-  const wordPathRef = useRef<string[]>([]);
-  const highlightedIdsRef = useRef<number[]>([]);
-
-  const [displayWordPath, setDisplayWordPath] = useState<string[]>([]);
-  const [highlightNodeIds, setHighlightNodeIds] = useState<number[]>(() => {
-    const saved = localStorage.getItem('highlightNodeIds');
-    try {
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [secondWord, setSecondWord] = useState<string | null>(null);
-
-  const [expandFirst, setExpandFirst] = useState<ExpandFromWordResult | null>(() => {
-    const saved = localStorage.getItem('expandFirst');
-    try {
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
-
-  // Ref pour accéder à la valeur actuelle d'expandFirst dans les handlers
-  const expandFirstRef = useRef<ExpandFromWordResult | null>(expandFirst);
-
-  // Synchroniser la ref avec le state
   useEffect(() => {
-    expandFirstRef.current = expandFirst;
-  }, [expandFirst]);
-
-  // Données WordNet
-  const [wordnetData, setWordnetData] = useState<WordnetData | null>(null);
-  const wordnetDataRef = useRef<WordnetData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  // --- Chargement des données WordNet au démarrage ---
-  useEffect(() => {
-    const loadData = async () => {
+    const initializeApp = async () => {
       try {
-        setIsLoading(true);
-        setLoadError(null);
-        const data = await loadWordnetData();
-        setWordnetData(data);
-        wordnetDataRef.current = data; // Synchroniser la ref
+        console.log('Initialisation ModernLemmaApp...');
+
+        // Commencer avec un mot aléatoire
+        const randomWord = randomWords[Math.floor(Math.random() * randomWords.length)];
+        setCurrentQuery(randomWord);
+        setSearchQuery(randomWord);
+
+        setIsInitialized(true);
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Erreur de chargement des données';
-        setLoadError(errorMessage);
-        console.error('Erreur chargement WordNet:', error);
-      } finally {
-        setIsLoading(false);
+        console.error('Erreur initialisation ModernLemmaApp:', error);
       }
     };
 
-    loadData();
+    initializeApp();
   }, []);
 
-  // Synchroniser cumulativePathIds quand expandFirst change - TEMPORAIREMENT DÉSACTIVÉ
-  // useEffect(() => {
-  //   if (expandFirst?.status === 'OK' && expandFirst.usedSynsetId && firstWord && wordPath.length === 1) {
-  //     // Initialiser le chemin cumulatif avec le premier synset
-  //     setCumulativePathIds([expandFirst.usedSynsetId]);
-  //   }
-  // }, [expandFirst, firstWord, wordPath.length]);
-
-  // --- Handlers selon les spécifications ---
-
-  const handleFirstWord = (word: string) => {
-    // 1. Sauvegarder le premier mot
-    firstWordRef.current = word;
-
-    // 2. Appeler expandFromWord avec la ref (toujours actuelle)
-    const currentData = wordnetDataRef.current;
-    if (currentData) {
-      const res = expandFromWord(word, currentData, {
-        depth: 3,
-        maxNodes: 100, // Limité à 100 nœuds pour plus de clarté
-        allowedRelations: ["HYPERNYM", "HYPONYM", "ANTONYM"]
-      });
-      setExpandFirst(res);
-      localStorage.setItem('expandFirst', JSON.stringify(res));
-    }
-
-    // 3. Réinitialiser tout le reste
-    setSecondWord(null);
-    wordPathRef.current = [word];
-    setDisplayWordPath([word]);
-    highlightedIdsRef.current = [];
-    setHighlightNodeIds([]);
+  const handleLemmaClick = (lemma: LemmaNode) => {
+    setSelectedLemma(lemma);
+    console.log('Lemme sélectionné:', lemma);
   };
 
-  const handleSecondWord = (word: string) => {
-    setSecondWord(word);
+  const handleSearch = () => {
+    if (searchQuery.trim()) {
+      setCurrentQuery(searchQuery.trim());
+      setGraphKey(prev => prev + 1); // Force re-render
+    }
   };
 
-  // Nouvelle fonction pour gérer les clics sur les mots dans le graphique
-  const handleWordClick = useCallback((word: string) => {
-    try {
-      // Version avec useRef pour éviter les re-renders
-      if (!firstWordRef.current || wordPathRef.current.length === 0) {
-        firstWordRef.current = word;
-        wordPathRef.current = [word];
-        setDisplayWordPath([word]);
-
-        // Appeler expandFromWord pour créer le graphique initial et obtenir l'ID
-        const currentData = wordnetDataRef.current;
-        if (currentData) {
-          const res = expandFromWord(word, currentData, {
-            depth: 3,
-            maxNodes: 100,
-            allowedRelations: ["HYPERNYM", "HYPONYM", "ANTONYM"]
-          });
-          setExpandFirst(res);
-          localStorage.setItem('expandFirst', JSON.stringify(res));
-
-          // Initialiser les IDs surlignés si on a un synset ID
-          if (res.status === 'OK' && res.usedSynsetId) {
-            const initialIds = [res.usedSynsetId];
-            highlightedIdsRef.current = initialIds;
-            setHighlightNodeIds(initialIds);
-            localStorage.setItem('highlightNodeIds', JSON.stringify(initialIds));
-          }
-        }
-      } else {
-        // Force-access aux valeurs actuelles via une fonction
-        const getCurrentExpandFirst = () => {
-          // Essayer d'abord la ref, puis le state directement
-          return expandFirstRef.current || expandFirst;
-        };
-
-        const currentExpandFirst = getCurrentExpandFirst();
-        let graphToUse = currentExpandFirst?.status === 'OK' ? currentExpandFirst.graph : null;
-
-        if (graphToUse) {
-          const clickedNode = graphToUse.nodes.find(node =>
-            node.lemmas.some(lemma => lemma === word)
-          );
-
-          if (clickedNode) {
-            // Ajouter au chemin de mots
-            const newWordPath = [...wordPathRef.current, word];
-            wordPathRef.current = newWordPath;
-            setDisplayWordPath(newWordPath);
-
-            // Ajouter au chemin de synset IDs pour le highlighting
-            const newHighlightIds = [...highlightedIdsRef.current, clickedNode.id];
-            highlightedIdsRef.current = newHighlightIds;
-            setHighlightNodeIds(newHighlightIds);
-            localStorage.setItem('highlightNodeIds', JSON.stringify(newHighlightIds));
-            setSecondWord(word);
-
-            // Expansion progressive - ajouter les connexions du mot cliqué
-            const currentData = wordnetDataRef.current;
-
-            if (currentData) {
-              // Faire une expansion autour du mot cliqué
-              const expansionResult = expandFromWord(word, currentData, {
-                depth: 3,
-                maxNodes: 50,
-                allowedRelations: ["HYPERNYM", "HYPONYM", "ANTONYM", "SIMILAR_TO", "ALSO"]
-              });
-
-              if (expansionResult.status === 'OK' && expansionResult.graph) {
-                // Fusionner avec le graphique existant
-                const currentGraph = expandFirstRef.current;
-                if (currentGraph?.status === 'OK' && currentGraph.graph) {
-                  const mergedGraph = mergeGraphs(currentGraph.graph, expansionResult.graph);
-                  const newExpandFirst = { ...currentGraph, graph: mergedGraph };
-                  setExpandFirst(newExpandFirst);
-                  expandFirstRef.current = newExpandFirst;
-                  localStorage.setItem('expandFirst', JSON.stringify(newExpandFirst));
-                }
-              }
-            }
-          }
-        } else {
-          // Fallback
-          wordPathRef.current = [...wordPathRef.current, word];
-          setDisplayWordPath([...wordPathRef.current]);
-        }
-      }
-    } catch (error) {
-      console.error('Error in handleWordClick:', error);
-    }
-  }, [expandFirst, wordnetData]); // Dépendances critiques
-
-  // Fonction pour réinitialiser le chemin
-  const handleResetPath = () => {
-    firstWordRef.current = null;
-    wordPathRef.current = [];
-    highlightedIdsRef.current = [];
-    setDisplayWordPath([]);
-    setHighlightNodeIds([]);
-    setSecondWord(null);
-    setExpandFirst(null);
-    localStorage.removeItem('expandFirst');
-    localStorage.removeItem('highlightNodeIds');
+  const handleRandom = () => {
+    const randomWord = randomWords[Math.floor(Math.random() * randomWords.length)];
+    setCurrentQuery(randomWord);
+    setSearchQuery(randomWord);
+    setGraphKey(prev => prev + 1); // Force re-render
   };
 
-  // Version simplifiée - juste passer directement les données au Graph3DView
-  const displayGraph = expandFirst?.status === 'OK' ? expandFirst.graph : null;
-
-
-
-  // --- Texte d'état UX ---
-
-  let helperText = "Commence par entrer un premier mot.";
-  if (loadError) {
-    helperText = `❌ Erreur: ${loadError}`;
-  } else if (isLoading) {
-    helperText = "🔄 Chargement des données WordNet...";
-  } else if (firstWordRef.current && !secondWord) {
-    if (expandFirst?.status === 'WORD_NOT_FOUND') {
-      helperText = `❌ Le mot "${firstWordRef.current}" n'a pas été trouvé.`;
-    } else if (expandFirst?.status === 'AMBIGUOUS') {
-      helperText = `⚠️ Le mot "${firstWordRef.current}" a plusieurs sens. Choix automatique appliqué.`;
-    } else {
-      helperText = `Exploration autour de « ${firstWordRef.current} ». Ajoute un deuxième mot pour tracer un chemin.`;
-    }
-  } else if (firstWordRef.current && secondWord) {
-    // Version simplifiée sans pathResult pour le test
-    helperText = `Exploration entre « ${firstWordRef.current} » et « ${secondWord} ».`;
+  if (!isInitialized) {
+    return (
+      <div
+        style={{
+          width: '100vw',
+          height: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: '#111',
+          color: '#f5f5f5',
+          fontFamily: 'system-ui, sans-serif'
+        }}
+      >
+        <div>Initialisation du système lemme...</div>
+      </div>
+    );
   }
 
   return (
     <div
       style={{
+        width: '100vw',
         height: '100vh',
+        margin: 0,
+        padding: 0,
         fontFamily: 'system-ui, sans-serif',
         background: '#111',
         color: '#f5f5f5',
         position: 'relative',
-        overflow: 'hidden',
+        overflow: 'hidden'
       }}
     >
-      {/* Panneau de contrôle flottant */}
-      <ControlPanel
-        firstWord={firstWordRef.current}
-        secondWord={secondWord}
-        helperText={helperText}
-        isLoading={isLoading}
-        wordPath={displayWordPath}
-        onFirstWordSubmit={handleFirstWord}
-        onSecondWordSubmit={handleSecondWord}
-        onResetPath={handleResetPath}
-      />
+      {/* Panneau de contrôle flottant adapté pour lemmes */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 20,
+          right: 20,
+          background: 'rgba(0, 0, 0, 0.9)',
+          backdropFilter: 'blur(10px)',
+          borderRadius: '12px',
+          padding: isCollapsed ? '12px' : '20px',
+          minWidth: isCollapsed ? 'auto' : '320px',
+          zIndex: 1000,
+          border: '1px solid rgba(255, 255, 255, 0.1)',
+          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+          transition: 'all 0.3s ease'
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <h2
+            style={{
+              margin: '0',
+              fontSize: '18px',
+              fontWeight: 600,
+              display: isCollapsed ? 'none' : 'block'
+            }}
+          >
+            🧠 Atlas Sémantique (lemmes)
+          </h2>
+          <button
+            onClick={() => setIsCollapsed(!isCollapsed)}
+            style={{
+              background: 'rgba(255, 255, 255, 0.1)',
+              border: 'none',
+              borderRadius: '6px',
+              color: '#f5f5f5',
+              padding: '8px 12px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              marginLeft: isCollapsed ? '0' : '10px'
+            }}
+          >
+            {isCollapsed ? '📖' : '📕'}
+          </button>
+        </div>
 
-      {/* Graphe plein écran */}
-      <Graph3DView
-        graph={displayGraph}
-        highlightNodeIds={highlightNodeIds}
-        onWordClick={handleWordClick}
-      />
+        {!isCollapsed && (
+          <>
+            <p
+              style={{
+                margin: '12px 0 16px 0',
+                fontSize: '14px',
+                opacity: 0.8,
+                lineHeight: 1.4
+              }}
+            >
+              Explorez l’atlas sémantique centré sur les lemmes du WordNet français.
+            </p>
 
+            {/* Barre de recherche */}
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                <input
+                  type="text"
+                  placeholder="Rechercher un mot..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  onKeyPress={e => e.key === 'Enter' && handleSearch()}
+                  style={{
+                    flex: 1,
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid rgba(255, 255, 255, 0.2)',
+                    background: 'rgba(255, 255, 255, 0.1)',
+                    color: '#f5f5f5',
+                    fontSize: '14px',
+                    outline: 'none'
+                  }}
+                />
+                <button
+                  onClick={handleSearch}
+                  style={{
+                    background: '#4ecdc4',
+                    border: 'none',
+                    borderRadius: '6px',
+                    color: '#111',
+                    padding: '8px 16px',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    fontWeight: '600'
+                  }}
+                >
+                  🔍
+                </button>
+              </div>
+              <button
+                onClick={handleRandom}
+                style={{
+                  width: '100%',
+                  background: '#ff6b6b',
+                  border: 'none',
+                  borderRadius: '6px',
+                  color: '#fff',
+                  padding: '10px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '600'
+                }}
+              >
+                🎲 Mot aléatoire
+              </button>
+            </div>
+
+            {/* Mot actuel */}
+            {currentQuery && (
+              <div
+                style={{
+                  background: 'rgba(76, 205, 196, 0.2)',
+                  borderRadius: '8px',
+                  padding: '12px',
+                  marginBottom: '16px'
+                }}
+              >
+                <div style={{ fontSize: '12px', opacity: 0.7 }}>Mot exploré :</div>
+                <div style={{ fontSize: '16px', fontWeight: 600, marginTop: '4px' }}>
+                  {currentQuery}
+                </div>
+              </div>
+            )}
+
+            {/* Lemme sélectionné */}
+            {selectedLemma && (
+              <div
+                style={{
+                  background: 'rgba(255, 255, 255, 0.1)',
+                  borderRadius: '8px',
+                  padding: '12px'
+                }}
+              >
+                <div style={{ fontSize: '12px', opacity: 0.7 }}>Lemme sélectionné :</div>
+                <div style={{ fontSize: '14px', fontWeight: 500, marginTop: '4px' }}>
+                  {selectedLemma.lemma}
+                </div>
+                <div
+                  style={{
+                    fontSize: '11px',
+                    opacity: 0.6,
+                    marginTop: '6px',
+                    fontStyle: 'italic'
+                  }}
+                >
+                  💡 Appuyez sur ESPACE pour explorer ce lemme dans l’atlas
+                </div>
+              </div>
+            )}
+
+            {/* Instructions */}
+            <div
+              style={{
+                background: 'rgba(255, 255, 255, 0.05)',
+                borderRadius: '6px',
+                padding: '8px',
+                fontSize: '11px',
+                opacity: 0.7,
+                lineHeight: 1.3
+              }}
+            >
+              🖱️ Cliquez sur un mot pour le sélectionner
+              <br />
+              ⌨️ ESPACE pour explorer le mot sélectionné
+              <br />
+              🌐 Souris pour naviguer en 3D
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Graphe lemma plein écran */}
+      <SimpleLemmaGraph
+        key={graphKey}
+        width={window.innerWidth}
+        height={window.innerHeight}
+        initialQuery={currentQuery}
+        onLemmaClick={handleLemmaClick}
+      />
     </div>
   );
 }

@@ -1,2 +1,51 @@
 # Raw data files
 data/raw/
+
+# Node modules
+node_modules/
+*/node_modules/
+
+# Package locks (peuvent varier selon l'environnement)
+package-lock.json
+*/package-lock.json
+
+# Generated files
+*.log
+*.tmp
+*.temp
+
+# Generated atlas files
+global-positions.json
+atlas-*.json
+lemma-atlas-*.json
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Scripts temporaires
+test-*.js
