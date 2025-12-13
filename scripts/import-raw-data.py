@@ -12,7 +12,7 @@ Usage:
 import os
 import sys
 from collections import defaultdict
-from typing import Set, Dict, List, Tuple
+from typing import Set, Dict, Tuple
 import nltk
 from nltk.corpus import wordnet as wn
 
@@ -47,7 +47,6 @@ def get_synset_id(synset) -> str:
     Returns:
         String au format "00001740-n" (offset zero-padded sur 8 chiffres + pos)
     """
-    # Zero-pad l'offset sur 8 chiffres
     offset = str(synset.offset()).zfill(8)
     pos = synset.pos()
     return f"{offset}-{pos}"
@@ -58,7 +57,6 @@ def get_french_lemmas(synset):
     Récupère les lemmes français pour un synset via OMW-1.4
     via synset.lemma_names(lang="fra").
     """
-
     try:
         lemmas = synset.lemma_names(lang="fra")
         # Nettoyage doublons, juste pour être safe
@@ -69,7 +67,6 @@ def get_french_lemmas(synset):
                 seen.add(lemma)
                 result.append(lemma)
         return result
-
     except:
         return []
 
@@ -85,8 +82,6 @@ def get_french_gloss(synset) -> str:
         Définition en français ou chaîne vide si non disponible
     """
     try:
-        # Essayer différentes méthodes pour obtenir la gloss française
-
         # Méthode 1: via synset.definition avec lang
         try:
             fr_def = synset.definition(lang="fra")
@@ -95,17 +90,14 @@ def get_french_gloss(synset) -> str:
         except:
             pass
 
-        # Méthode 2: via OMW si disponible
+        # Méthode 2: via OMW si disponible (pas stable selon versions)
         try:
-            # Cette méthode peut varier selon la version d'OMW
-            # Pour l'instant, on retourne une chaîne vide car OMW-1.4
-            # ne contient pas toujours les définitions françaises
             pass
         except:
             pass
 
         return ""
-    except Exception as e:
+    except Exception:
         return ""
 
 
@@ -158,6 +150,8 @@ def export_synsets(
     """
     Exporte le fichier synsets.tab.
 
+    Ajout: colonne lexname (WordNet) pour filtrage propre des entités nommées (noun.person, noun.location, ...)
+
     Args:
         french_synsets: Set des IDs de synsets français
         synset_objects: Dict ID -> synset objet
@@ -168,28 +162,46 @@ def export_synsets(
     print(f"📝 Export des synsets vers {output_file}...")
 
     pos_counts = defaultdict(int)
+    lexname_counts = defaultdict(int)
 
     with open(output_file, "w", encoding="utf-8") as f:
-        # En-tête
-        f.write("synset\tpos\tgloss_en\tgloss_fr\n")
+        # En-tête (⚠️ colonne lexname ajoutée)
+        f.write("synset\tpos\tlexname\tgloss_en\tgloss_fr\n")
 
         for synset_id in sorted(french_synsets):
             synset = synset_objects[synset_id]
 
             pos = synset.pos()
+
+            # lexname WordNet (noun.person, noun.location, ...)
+            try:
+                lexname = synset.lexname() or ""
+            except Exception:
+                lexname = ""
+
             gloss_en = synset.definition() or ""
             gloss_fr = get_french_gloss(synset)
 
-            # Nettoyer les gloss des caractères problématiques (tabulations, newlines)
+            # Nettoyer champs (tabulations/newlines)
+            lexname = lexname.replace("\t", " ").replace("\n", " ").replace("\r", " ")
             gloss_en = gloss_en.replace("\t", " ").replace("\n", " ").replace("\r", " ")
             gloss_fr = gloss_fr.replace("\t", " ").replace("\n", " ").replace("\r", " ")
 
-            f.write(f"{synset_id}\t{pos}\t{gloss_en}\t{gloss_fr}\n")
+            f.write(f"{synset_id}\t{pos}\t{lexname}\t{gloss_en}\t{gloss_fr}\n")
             pos_counts[pos] += 1
+            if lexname:
+                lexname_counts[lexname] += 1
 
     print(f"✓ {len(french_synsets)} synsets exportés")
     for pos, count in sorted(pos_counts.items()):
         print(f"  {pos}: {count}")
+
+    # Petit aperçu lexname (top 10)
+    if lexname_counts:
+        top_lex = sorted(lexname_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+        print("  Top lexname:")
+        for ln, c in top_lex:
+            print(f"    {ln}: {c}")
 
 
 def export_senses(
@@ -229,7 +241,6 @@ def export_senses(
                     unique_lemmas.append(lemma)
 
             for sense_number, lemma in enumerate(unique_lemmas, 1):
-                # Nettoyer le lemma des caractères problématiques
                 clean_lemma = (
                     lemma.replace("\t", " ").replace("\n", " ").replace("\r", " ")
                 )
@@ -250,15 +261,11 @@ def export_relations(
       - relations de synset -> synset (hypernyms, meronyms, etc.)
       - relations via les lemmes (antonyms, dérivations, pertainyms)
     """
-
     output_file = os.path.join(output_dir, "relations.tab")
-
     print(f"📝 Export des relations vers {output_file}...")
 
-    # Set pour éviter les doublons de relations
     relations_set: Set[Tuple[str, str, str]] = set()
 
-    # 1) Relations directement disponibles sur les synsets
     synset_relation_methods = [
         ("HYPERNYM", "hypernyms"),
         ("HYPONYM", "hyponyms"),
@@ -292,31 +299,26 @@ def export_relations(
                     continue
                 for target_synset in method():
                     target_id = get_synset_id(target_synset)
-                    # On ne garde que les liens entre synsets qui ont du français
                     if target_id in french_synsets:
                         relations_set.add((synset_id, rel_label, target_id))
             except Exception:
-                # On ne veut pas crasher l'export sur un synset chelou
                 continue
 
-        # 2) Relations via les lemmes (antonymie, dérivation, pertainym)
+        # Relations via les lemmes (antonymie, dérivation, pertainym)
         try:
             for lemma in synset.lemmas():
-                # ANTONYMS (comme tu le faisais déjà)
                 for antonym in lemma.antonyms():
                     target_synset = antonym.synset()
                     target_id = get_synset_id(target_synset)
                     if target_id in french_synsets:
                         relations_set.add((synset_id, "ANTONYM", target_id))
 
-                # DÉRIVATION (nom <-> verbe <-> adjectif, etc.)
                 for der in lemma.derivationally_related_forms():
                     target_synset = der.synset()
                     target_id = get_synset_id(target_synset)
                     if target_id in french_synsets:
                         relations_set.add((synset_id, "DERIVATION", target_id))
 
-                # PERTAINYM (souvent adj -> nom de base)
                 if hasattr(lemma, "pertainyms"):
                     for pert in lemma.pertainyms():
                         target_synset = pert.synset()
@@ -326,11 +328,9 @@ def export_relations(
         except Exception:
             continue
 
-    # Écrire les relations triées
     relation_counts: Dict[str, int] = defaultdict(int)
 
     with open(output_file, "w", encoding="utf-8") as f:
-        # En-tête
         f.write("synset1\trelation\tsynset2\n")
 
         for synset1, relation, synset2 in sorted(relations_set):
@@ -350,28 +350,23 @@ def main():
     print("🚀 Export OMW-FR-1.4 vers TSV")
     print("=" * 40)
 
-    # Télécharger les ressources NLTK si nécessaire
     download_nltk_resources()
 
-    # Créer le dossier de sortie
     output_dir = os.path.join("data", "raw", "omw-fr-1.4")
     os.makedirs(output_dir, exist_ok=True)
     print(f"📁 Dossier de sortie: {output_dir}")
 
     try:
-        # Filtrer les synsets français
         french_synsets, synset_objects = filter_french_synsets()
 
         if not french_synsets:
             print("❌ Aucun synset français trouvé. Vérifiez l'installation d'OMW-1.4.")
             return
 
-        # Exporter les trois fichiers
         export_synsets(french_synsets, synset_objects, output_dir)
         senses_count = export_senses(french_synsets, synset_objects, output_dir)
         relations_count = export_relations(french_synsets, synset_objects, output_dir)
 
-        # Résumé final
         print("\n" + "=" * 40)
         print("📊 RÉSUMÉ DE L'EXPORT")
         print("=" * 40)

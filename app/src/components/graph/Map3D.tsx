@@ -74,6 +74,7 @@ export default function Map3D({
     if (!rawData) return { nodes: [], links: [] };
 
     let rawNodes = rawData.nodes;
+    const rawLinks = rawData.links || [];
 
     // --- MODE STUDY : on montre tout le niveau courant (avec downsample) ---
     if (mode === "study") {
@@ -81,7 +82,14 @@ export default function Map3D({
         const step = Math.ceil(rawNodes.length / MAX_NODES_2D);
         rawNodes = rawNodes.filter((_, i) => i % step === 0);
       }
-      return { nodes: rawNodes, links: [] };
+
+      // Filtrer les liens pour ne garder que ceux entre nœuds visibles
+      const nodeIdSet = new Set(rawNodes.map(n => String(n.id)));
+      const filteredLinks = rawLinks.filter(link =>
+        nodeIdSet.has(String(link.source)) && nodeIdSet.has(String(link.target))
+      );
+
+      return { nodes: rawNodes, links: filteredLinks };
     }
 
     // --- MODE PLAY : montrer les nœuds visibles de Navigation ---
@@ -98,9 +106,15 @@ export default function Map3D({
         visibleSet.has(String(n.id))
       );
 
-      console.log(`[Map3D/play/planet] ${nodes.length} nœuds visibles (sur ${visibleNavigationNodeIds.length} dans Navigation)`);
+      // Filtrer les liens pour ne garder que ceux entre nœuds visibles
+      const nodeIdSet = new Set(nodes.map(n => String(n.id)));
+      const filteredLinks = rawLinks.filter(link =>
+        nodeIdSet.has(String(link.source)) && nodeIdSet.has(String(link.target))
+      );
 
-      return { nodes, links: [] };
+      console.log(`[Map3D/play/planet] ${nodes.length} nœuds visibles, ${filteredLinks.length} liens (sur ${visibleNavigationNodeIds.length} dans Navigation)`);
+
+      return { nodes, links: filteredLinks };
     }
 
     // Sinon (supercluster/cluster/galaxy) : filtrer les clusters contenant des nœuds visibles
@@ -110,11 +124,17 @@ export default function Map3D({
       return members.some((memberId) => visibleSet.has(String(memberId)));
     });
 
-    console.log(
-      `[Map3D/play/${currentLevelId}] ${filteredClusters.length} clusters contiennent des nœuds visibles (sur ${rawNodes.length} total)`
+    // Filtrer les liens pour ne garder que ceux entre clusters visibles
+    const clusterIdSet = new Set(filteredClusters.map(n => String(n.id)));
+    const filteredLinks = rawLinks.filter(link =>
+      clusterIdSet.has(String(link.source)) && clusterIdSet.has(String(link.target))
     );
 
-    return { nodes: filteredClusters, links: [] };
+    console.log(
+      `[Map3D/play/${currentLevelId}] ${filteredClusters.length} clusters contiennent des nœuds visibles, ${filteredLinks.length} liens (sur ${rawNodes.length} total)`
+    );
+
+    return { nodes: filteredClusters, links: filteredLinks };
   }, [rawData, mode, visibleNavigationNodeIds, currentLevelId]);
 
 
@@ -231,12 +251,11 @@ export default function Map3D({
     scene.add(helper);
 
     const levelDistanceFactor =
-      currentLevelId === "galaxie" ? 6.0 :
-        currentLevelId === "constellation" ? 5.0 :
-          currentLevelId === "amas" ? 4.0 :
-            currentLevelId === "continent" ? 3.5 :
-              currentLevelId === "pays" ? 3.0 :
-                2.8;
+      currentLevelId === "supercluster" ? 6.0 :
+        currentLevelId === "cluster" ? 5.0 :
+          currentLevelId === "galaxy" ? 4.0 :
+            currentLevelId === "planet" ? 3.5 :
+              2.8;
 
     const dist = radiusMean * levelDistanceFactor;
 
@@ -267,12 +286,11 @@ export default function Map3D({
     const density = d > 0 ? d : intensityFromDeg;
 
     const levelScale =
-      currentLevelId === "galaxie" ? 3.5 :
-        currentLevelId === "constellation" ? 3.0 :
-          currentLevelId === "amas" ? 2.3 :
-            currentLevelId === "continent" ? 1.8 :
-              currentLevelId === "pays" ? 1.4 :
-                1.2;
+      currentLevelId === "supercluster" ? 3.5 :
+        currentLevelId === "cluster" ? 3.0 :
+          currentLevelId === "galaxy" ? 2.3 :
+            currentLevelId === "planet" ? 1.6 :
+              1.2;
 
     const baseR = 0.7 * levelScale;
     const intensity = 0.35 + 0.65 * density;
@@ -311,9 +329,9 @@ export default function Map3D({
     const w = parseInt(link.relType?.replace("w", "") ?? "1", 10) || 1;
 
     const baseAlpha =
-      currentLevelId === "galaxie" ? 0.25 :
-        currentLevelId === "constellation" ? 0.22 :
-          currentLevelId === "amas" ? 0.18 :
+      currentLevelId === "supercluster" ? 0.25 :
+        currentLevelId === "cluster" ? 0.22 :
+          currentLevelId === "galaxy" ? 0.18 :
             0.12;
 
     const alpha = Math.min(baseAlpha + w * 0.01, 0.4);
@@ -424,39 +442,39 @@ export default function Map3D({
           {mode === 'play' ? 'Explorez des mots dans Navigation pour les voir ici' : 'Aucune donnée à afficher'}
         </div>
       ) : (
-      <ForceGraph3D
-        ref={fgRef}
-        width={width}
-        height={height}
-        backgroundColor={backgroundColor}
-        graphData={displayData}
-        showNavInfo={false}
-        enableNodeDrag={false}
-        nodeRelSize={1}
-        d3AlphaDecay={1}
-        d3VelocityDecay={1}
-        warmupTicks={0}
-        cooldownTicks={0}
-        // 🎯 Clic sur nœud
-        onNodeClick={(node) => {
-          const n = node as GraphNode;
-          setSelectedNode(n);
+        <ForceGraph3D
+          ref={fgRef}
+          width={width}
+          height={height}
+          backgroundColor={backgroundColor}
+          graphData={displayData}
+          showNavInfo={false}
+          enableNodeDrag={false}
+          nodeRelSize={1}
+          d3AlphaDecay={1}
+          d3VelocityDecay={1}
+          warmupTicks={0}
+          cooldownTicks={0}
+          // 🎯 Clic sur nœud
+          onNodeClick={(node) => {
+            const n = node as GraphNode;
+            setSelectedNode(n);
 
-          // 🔥 Mode Play → on enregistre l'exploration
-          if (mode === "play") {
-            addExploredNode(String(n.id));
+            // 🔥 Mode Play → on enregistre l'exploration
+            if (mode === "play") {
+              addExploredNode(String(n.id));
+            }
+          }}
+          // 🎯 Nœuds visibles uniquement si !linksOnly
+          nodeOpacity={linksOnly ? 0 : 1}
+          nodeThreeObject={
+            linksOnly ? (() => null) as any : (nodeThreeObject as any)
           }
-        }}
-        // 🎯 Nœuds visibles uniquement si !linksOnly
-        nodeOpacity={linksOnly ? 0 : 1}
-        nodeThreeObject={
-          linksOnly ? (() => null) as any : (nodeThreeObject as any)
-        }
-        // 🎯 Liens : style spécial en mode "liens seuls"
-        linkWidth={linkWidth as any}
-        linkOpacity={linksOnly ? 0.5 : 0.18}
-        linkColor={linkColor as any}
-      />
+          // 🎯 Liens : style spécial en mode "liens seuls"
+          linkWidth={linkWidth as any}
+          linkOpacity={linksOnly ? 0.5 : 0.18}
+          linkColor={linkColor as any}
+        />
       )}
     </div>
   );

@@ -3,6 +3,7 @@ import ForceGraph3D from 'react-force-graph-3d';
 import * as THREE from 'three';
 import { lemmaDataService } from '../../services/LemmaDataService';
 import type { LemmaNode } from '../../types/lemma';
+import { useAppStore } from '../../store/appStore';
 
 // Position scale for the atlas
 const POSITION_SCALE = 5;
@@ -46,6 +47,10 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
   initialQuery = 'vie',
   onLemmaClick
 }) => {
+  // Lecture du mode et des mots découverts depuis le store
+  const mode = useAppStore((s) => s.mode);
+  const visibleNavigationNodeIds = useAppStore((s) => s.visibleNavigationNodeIds);
+
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -54,8 +59,13 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
   const forceGraphRef = useRef<any>(null);
   const hasInitialCameraRef = useRef(false);
 
-  // Keyboard handler: expand from selected lemma on Space
+  console.log('[GraphExploration] Mode:', mode, 'Mots découverts:', visibleNavigationNodeIds.length);
+
+  // Keyboard handler: expand from selected lemma on Space (study mode only)
   useEffect(() => {
+    // Disable manual expansion in play mode
+    if (mode === 'play') return;
+
     const handleKeyPress = (event: KeyboardEvent) => {
       if (event.key === ' ' && selectedNodeId) {
         event.preventDefault();
@@ -65,7 +75,7 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
 
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [selectedNodeId]);
+  }, [selectedNodeId, mode]);
 
   const expandFromLemma = (lemmaName: string) => {
     console.log('Expansion depuis le lemme :', lemmaName);
@@ -155,15 +165,14 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
     }
   }, []);
 
-  // Initial graph loading
+  // Initial graph loading - adaptatif selon le mode
   useEffect(() => {
     const loadData = async () => {
       try {
-        console.log('Initialisation GraphExploration...');
+        console.log('[GraphExploration] Initialisation en mode:', mode);
 
         await lemmaDataService.initialize();
 
-        // 1) Search for starting lemma
         const searchResults = lemmaDataService.searchLemmas({
           query: initialQuery,
           limit: 1
@@ -174,67 +183,93 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
         }
 
         const centerLemma = searchResults[0];
-        console.log('Lemme centre:', centerLemma);
+        console.log('[GraphExploration] Lemme centre:', centerLemma.lemma);
 
         const nodes: GraphNode[] = [];
         const links: GraphLink[] = [];
 
-        // 2) Add center node
-        const centerNode = createGraphNode(centerLemma, true);
-        nodes.push(centerNode);
+        // Mode Study: BFS expansion complète
+        if (mode === 'study') {
+          console.log('[GraphExploration] Mode STUDY: expansion BFS');
 
-        // 3) Expand via BFS
-        const expansion = lemmaDataService.expandLemma(centerLemma.lemma, 150, 2);
-        console.log(
-          'Expansion:',
-          centerLemma.lemma,
-          'neighbors:',
-          expansion?.neighbors?.length || 0
-        );
+          // Add center node
+          nodes.push(createGraphNode(centerLemma, true));
 
-        if (expansion) {
-          // 3A) Add all unique neighbors
-          expansion.neighbors.forEach(neighbor => {
-            if (!nodes.find(n => n.id === neighbor.lemma)) {
-              nodes.push(createGraphNode(neighbor, false));
+          // Expand via BFS
+          const expansion = lemmaDataService.expandLemma(centerLemma.lemma, 150, 2);
+
+          if (expansion) {
+            // Add neighbors
+            expansion.neighbors.forEach(neighbor => {
+              if (!nodes.find(n => n.id === neighbor.lemma)) {
+                nodes.push(createGraphNode(neighbor, false));
+              }
+            });
+
+            // Add missing nodes from relations
+            expansion.relations.forEach(rel => {
+              if (!nodes.find(n => n.id === rel.source)) {
+                const node = lemmaDataService.getLemmaByName(rel.source);
+                if (node) nodes.push(createGraphNode(node, false));
+              }
+              if (!nodes.find(n => n.id === rel.target)) {
+                const node = lemmaDataService.getLemmaByName(rel.target);
+                if (node) nodes.push(createGraphNode(node, false));
+              }
+            });
+
+            // Add relations
+            expansion.relations.forEach(rel => {
+              if (!links.find(l => l.source === rel.source && l.target === rel.target)) {
+                links.push({
+                  source: rel.source,
+                  target: rel.target,
+                  weight: rel.weight
+                });
+              }
+            });
+          }
+        }
+        // Mode Play: seulement le mot initial au départ
+        else {
+          console.log('[GraphExploration] Mode PLAY: mot initial seulement');
+          nodes.push(createGraphNode(centerLemma, true));
+
+          // Charger les liens si des mots ont déjà été découverts
+          if (visibleNavigationNodeIds.length > 0) {
+            console.log('[GraphExploration] Chargement des mots déjà découverts:', visibleNavigationNodeIds.length);
+
+            for (const nodeId of visibleNavigationNodeIds) {
+              const lemma = lemmaDataService.getLemmaByName(nodeId);
+              if (lemma && !nodes.find(n => n.id === nodeId)) {
+                nodes.push(createGraphNode(lemma, false));
+              }
             }
-          });
 
-          // 3B) Add missing nodes from relations
-          expansion.relations.forEach(rel => {
-            if (!nodes.find(n => n.id === rel.source)) {
-              const node = lemmaDataService.getLemmaByName(rel.source);
-              if (node) nodes.push(createGraphNode(node, false));
-            }
-
-            if (!nodes.find(n => n.id === rel.target)) {
-              const node = lemmaDataService.getLemmaByName(rel.target);
-              if (node) nodes.push(createGraphNode(node, false));
-            }
-          });
-
-          // 3C) Add relations
-          expansion.relations.forEach(rel => {
-            if (
-              !links.find(
-                l => l.source === rel.source && l.target === rel.target
-              )
-            ) {
-              links.push({
-                source: rel.source,
-                target: rel.target,
-                weight: rel.weight
+            // Charger les liens entre les nœuds découverts
+            const nodeIdSet = new Set(nodes.map(n => n.id));
+            for (const nodeId of nodeIdSet) {
+              const edges = lemmaDataService.getLemmaEdges(nodeId);
+              edges.forEach(edge => {
+                const targetInGraph = nodeIdSet.has(edge.target);
+                if (targetInGraph && !links.find(l => l.source === edge.source && l.target === edge.target)) {
+                  links.push({
+                    source: edge.source,
+                    target: edge.target,
+                    weight: edge.weight
+                  });
+                }
               });
             }
-          });
+          }
         }
 
-        console.log(`Graphe créé: ${nodes.length} nœuds, ${links.length} liens`);
+        console.log(`[GraphExploration] Graphe créé: ${nodes.length} nœuds, ${links.length} liens`);
         setGraphData({ nodes, links });
         setIsLoading(false);
 
       } catch (err: any) {
-        console.error('Erreur chargement:', err);
+        console.error('[GraphExploration] Erreur chargement:', err);
         setError(err.message ?? 'Erreur inconnue');
         setIsLoading(false);
       }
@@ -242,7 +277,52 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
 
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [mode, initialQuery]);
+
+  // Dynamic update when new words are discovered in Navigation (play mode only)
+  useEffect(() => {
+    if (mode !== 'play') return;
+    if (visibleNavigationNodeIds.length === 0) return;
+
+    console.log('[GraphExploration] Mise à jour dynamique:', visibleNavigationNodeIds.length, 'mots découverts');
+
+    setGraphData(prevData => {
+      const currentNodeIds = new Set(prevData.nodes.map(n => n.id));
+      const newNodes = [...prevData.nodes];
+      const newLinks = [...prevData.links];
+
+      // Add newly discovered nodes
+      for (const nodeId of visibleNavigationNodeIds) {
+        if (!currentNodeIds.has(nodeId)) {
+          const lemma = lemmaDataService.getLemmaByName(nodeId);
+          if (lemma) {
+            newNodes.push(createGraphNode(lemma, false));
+            currentNodeIds.add(nodeId);
+          }
+        }
+      }
+
+      // Add links between visible nodes
+      for (const nodeId of currentNodeIds) {
+        const edges = lemmaDataService.getLemmaEdges(nodeId);
+        edges.forEach(edge => {
+          const targetInGraph = currentNodeIds.has(edge.target);
+          const linkExists = newLinks.find(l => l.source === edge.source && l.target === edge.target);
+          if (targetInGraph && !linkExists) {
+            newLinks.push({
+              source: edge.source,
+              target: edge.target,
+              weight: edge.weight
+            });
+          }
+        });
+      }
+
+      console.log(`[GraphExploration] Graphe mis à jour: ${newNodes.length} nœuds (+${newNodes.length - prevData.nodes.length}), ${newLinks.length} liens (+${newLinks.length - prevData.links.length})`);
+
+      return { nodes: newNodes, links: newLinks };
+    });
+  }, [mode, visibleNavigationNodeIds]);
 
   // Helper functions
   const createGraphNode = (lemma: LemmaNode, isCenter: boolean): GraphNode => {
@@ -339,13 +419,55 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
   }
 
   return (
-    <ForceGraph3D
-      ref={forceGraphRef}
-      width={width}
-      height={height}
-      graphData={graphData}
-      backgroundColor="#111"
-      controlType="orbit"
+    <div style={{ position: 'relative', width, height }}>
+      {/* Mode indicator and stats */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 10,
+          left: 10,
+          background: 'rgba(0, 0, 0, 0.7)',
+          color: '#f5f5f5',
+          padding: '8px 12px',
+          borderRadius: '6px',
+          fontSize: '13px',
+          fontFamily: 'monospace',
+          zIndex: 1000,
+          pointerEvents: 'none'
+        }}
+      >
+        {mode === 'play' ? (
+          <div>
+            <div style={{ color: '#4ecdc4', fontWeight: 'bold' }}>MODE: PLAY</div>
+            <div>Découverts: {graphData.nodes.length} mots</div>
+            <div>Liens: {graphData.links.length}</div>
+            {graphData.nodes.length === 1 && (
+              <div style={{ marginTop: 4, color: '#ffaa00' }}>
+                → Naviguez pour découvrir des mots !
+              </div>
+            )}
+          </div>
+        ) : (
+          <div>
+            <div style={{ color: '#ff6b6b', fontWeight: 'bold' }}>MODE: STUDY</div>
+            <div>Exploration: {graphData.nodes.length} nœuds</div>
+            <div>Liens: {graphData.links.length}</div>
+            {selectedNodeId && (
+              <div style={{ marginTop: 4, color: '#ffaa00' }}>
+                → Appuyez sur ESPACE pour étendre
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <ForceGraph3D
+        ref={forceGraphRef}
+        width={width}
+        height={height}
+        graphData={graphData}
+        backgroundColor="#111"
+        controlType="orbit"
       nodeThreeObject={(node: any) => {
         const isSelected = node.isSelected;
         const isCenter = node.isCenter;
@@ -437,5 +559,6 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
         fg.cameraPosition(pos, { x: 0, y: 0, z: 0 }, 2000);
       }}
     />
+    </div>
   );
 };
