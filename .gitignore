@@ -18,6 +18,8 @@ package-lock.json
 global-positions.json
 atlas-*.json
 lemma-atlas-*.json
+multiscale-*.json
+lemma-*.json
 
 # Build outputs
 dist/
@@ -49,3 +51,19 @@ Thumbs.db
 
 # Scripts temporaires
 test-*.js
+
+# Python
+venv/
+*/venv/
+__pycache__/
+*/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.coverage
+*.egg-info/
+dist-python/

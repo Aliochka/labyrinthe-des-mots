@@ -52,3 +52,38 @@ export interface PathResult {
     truncated?: boolean;
   };
 }
+
+// Types bas niveau pour les graphes 3D / multi-échelles
+
+export interface GraphNode {
+  id: string;
+  name: string;
+  x?: number;
+  y?: number;
+  z?: number;
+  size?: number;
+  color?: string;
+  members?: string[]; // IDs des nœuds originaux (pour les clusters)
+}
+
+export interface GraphLink {
+  source: string | number;
+  target: string | number;
+  relType?: string;
+}
+
+export interface GraphData {
+  nodes: GraphNode[];
+  links: GraphLink[];
+}
+
+export interface MultiScaleGraphLevel {
+  id: string;
+  minZoom: number;
+  maxZoom: number;
+  data: GraphData;
+}
+
+export interface MultiScaleGraph {
+  levels: MultiScaleGraphLevel[];
+}

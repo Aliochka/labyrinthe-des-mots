@@ -14,9 +14,10 @@ import type {
   LemmaAtlas,
   LemmaRawData,
   LemmaSearchParams,
-  LemmaExpandResponse,
-  GlobalPosition
+  LemmaExpandResponse
 } from '../types/lemma';
+
+export type LayoutType = 'deepwalk' | 'random' | 'noise';
 
 /**
  * Main service for lemma-centric data access
@@ -24,14 +25,15 @@ import type {
 export class LemmaDataService {
   private isInitialized = false;
   private data: LemmaRawData | null = null;
+  private currentLayout: LayoutType = 'random';
 
   /**
    * Initialize the service by loading the lemma atlas from /public/lemma-atlas.json
    */
-  async initialize(): Promise<void> {
-    if (this.isInitialized) return;
+  async initialize(layout: LayoutType = 'random'): Promise<void> {
+    if (this.isInitialized && this.currentLayout === layout) return;
 
-    console.log('[LOAD] Initializing LemmaDataService...');
+    console.log(`[LOAD] Initializing LemmaDataService with layout: ${layout}...`);
 
     this.data = {
       lemmaNodes: new Map(),
@@ -39,13 +41,15 @@ export class LemmaDataService {
       lemmaPositions: new Map()
     };
 
+    this.currentLayout = layout;
     await this.loadLemmaAtlas();
     this.isInitialized = true;
 
     console.log(`[OK] LemmaDataService initialized:`, {
       lemmas: this.data.lemmaNodes.size,
       relations: this.data.lemmaRelations.size,
-      positions: this.data.lemmaPositions.size
+      positions: this.data.lemmaPositions.size,
+      layout: this.currentLayout
     });
   }
 
@@ -54,21 +58,50 @@ export class LemmaDataService {
    */
   private async loadLemmaAtlas(): Promise<void> {
     try {
-      const response = await fetch('/lemma-atlas-complete.json');
-      if (!response.ok) {
-        throw new Error(`Failed to load lemma atlas: ${response.status}`);
+      // Load lemma graph (nodes + edges)
+      const graphResponse = await fetch('/lemma-graph.json');
+      if (!graphResponse.ok) {
+        throw new Error(`Failed to load lemma graph: ${graphResponse.status}`);
+      }
+      const atlas: LemmaAtlas = await graphResponse.json();
+
+      // Load positions from multiscale file based on layout
+      const positionsFile = `/multiscale-${this.currentLayout}.json`;
+      const positionsResponse = await fetch(positionsFile);
+      if (!positionsResponse.ok) {
+        throw new Error(`Failed to load positions from ${positionsFile}: ${positionsResponse.status}`);
+      }
+      const multiscale = await positionsResponse.json();
+
+      // Extract positions from "planet" level (last level with all individual lemmas)
+      const planetLevel = multiscale.levels.find((level: any) => level.id === 'planet');
+      if (!planetLevel) {
+        throw new Error('Planet level not found in multiscale data');
       }
 
-      const atlas: LemmaAtlas = await response.json();
+      const positionsMap = new Map<string, { x: number; y: number; z: number }>();
+      for (const node of planetLevel.data.nodes) {
+        positionsMap.set(node.name, { x: node.x, y: node.y, z: node.z });
+      }
 
-      // Index nodes
+      console.log(`[POSITIONS] Loaded ${positionsMap.size} positions from multiscale`);
+
+      // Index nodes with positions
       for (const node of atlas.nodes) {
-        this.data!.lemmaNodes.set(node.lemma, node);
-        this.data!.lemmaPositions.set(node.lemma, {
-          x: node.x,
-          y: node.y,
-          z: node.z
-        });
+        const position = positionsMap.get(node.lemma);
+        if (position) {
+          // Create enhanced node with positions
+          const enhancedNode: LemmaNode = {
+            ...node,
+            x: position.x,
+            y: position.y,
+            z: position.z
+          };
+          this.data!.lemmaNodes.set(node.lemma, enhancedNode);
+          this.data!.lemmaPositions.set(node.lemma, position);
+        } else {
+          console.warn(`[WARN] No position found for lemma: ${node.lemma}`);
+        }
       }
 
       // Index edges (bidirectional for undirected graph)
@@ -229,6 +262,14 @@ export class LemmaDataService {
     this.ensureInitialized();
     const normalized = this.normalizeLemma(lemma);
     return this.data!.lemmaRelations.get(normalized) || [];
+  }
+
+  /**
+   * Get all lemma nodes (for game mode)
+   */
+  getAllLemmas(): LemmaNode[] {
+    this.ensureInitialized();
+    return Array.from(this.data!.lemmaNodes.values());
   }
 
   /**

@@ -1,8 +1,16 @@
 {
+  "scripts": {
+    "build:multiscale": "ts-node generateMultiscaleGraph.ts lemma-atlas-complete.json ../app/public/multiscale-graph.json",
+    "build:mixed-layout": "ts-node computeMixedLayout.ts"
+  },
   "dependencies": {
     "graphology": "^0.26.0",
+    "graphology-communities-louvain": "^2.0.2",
     "graphology-components": "^1.5.4",
-    "graphology-layout-forceatlas2": "^0.10.1"
+    "graphology-layout-forceatlas2": "^0.10.1",
+    "ml-matrix": "^6.12.1",
+    "ml-pca": "^4.1.1",
+    "simplex-noise": "^4.0.3"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
