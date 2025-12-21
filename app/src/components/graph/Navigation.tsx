@@ -9,14 +9,12 @@ import { usePlayerPhysics } from '../../hooks/usePlayerPhysics';
 import { useLemmaGraph } from '../../hooks/useLemmaGraph';
 import { useProximityDetection } from '../../hooks/useProximityDetection';
 import { useAppStore } from '../../store/appStore';
-import type { LayoutType } from '../../services/LemmaDataService';
 import { ControlPanel } from '../ui/ControlPanel';
 
 interface NavigationProps {
   width?: number;
   height?: number;
   initialQuery?: string;
-  layout?: LayoutType;
 }
 
 // Render distance for word planets (only show nearby planets)
@@ -25,11 +23,11 @@ const RENDER_DISTANCE = 50;
 const STAR_DISTANCE = 500;
 
 // Game scene component (inside Canvas)
-const GameScene: React.FC<{ randomSpawn: Vector3; layout: LayoutType }> = ({ randomSpawn, layout }) => {
+const GameScene: React.FC<{ randomSpawn: Vector3 }> = ({ randomSpawn }) => {
   const { camera } = useThree();
   const controls = useKeyboardControls();
   const physics = usePlayerPhysics(randomSpawn);
-  const { nodes: wordNodes, isLoading } = useLemmaGraph(layout);
+  const { nodes: wordNodes, isLoading } = useLemmaGraph();
   const [discoveredWords, setDiscoveredWords] = useState<Set<string>>(new Set());
   const [nearbyWords, setNearbyWords] = useState<typeof wordNodes>([]);
   const [distantWords, setDistantWords] = useState<typeof wordNodes>([]);
@@ -176,12 +174,9 @@ export const Navigation: React.FC<NavigationProps> = ({
   width = window.innerWidth,
   height = window.innerHeight - 96,
   initialQuery: _initialQuery,
-  layout: layoutProp,
 }) => {
   const [randomSpawn, setRandomSpawn] = useState<Vector3 | null>(null);
-  const storeLayout = useAppStore((s) => s.layout);
-  const layout = layoutProp ?? storeLayout;
-  const { nodes: allNodes } = useLemmaGraph(layout);
+  const { nodes: allNodes } = useLemmaGraph();
 
   // Generate random spawn position near a random word
   useEffect(() => {
@@ -220,7 +215,7 @@ export const Navigation: React.FC<NavigationProps> = ({
           fov: 60,
         }}
       >
-        <GameScene randomSpawn={randomSpawn} layout={layout} />
+        <GameScene randomSpawn={randomSpawn} />
       </Canvas>
 
       {/* Control Panel */}

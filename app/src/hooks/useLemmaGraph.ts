@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Vector3 } from 'three';
-import { lemmaDataService, type LayoutType } from '../services/LemmaDataService';
+import { lemmaDataService } from '../services/LemmaDataService';
 import type { WordNode } from '../types/game';
 
 const POSITION_SCALE = 5; // Scale factor for positions
@@ -12,7 +12,7 @@ export interface LemmaGraphData {
   error: string | null;
 }
 
-export function useLemmaGraph(layout: LayoutType = 'deepwalk'): LemmaGraphData {
+export function useLemmaGraph(): LemmaGraphData {
   const [data, setData] = useState<LemmaGraphData>({
     nodes: [],
     isLoading: true,
@@ -22,8 +22,8 @@ export function useLemmaGraph(layout: LayoutType = 'deepwalk'): LemmaGraphData {
   useEffect(() => {
     const loadData = async () => {
       try {
-        console.log(`[useLemmaGraph] Initializing with layout: ${layout}...`);
-        await lemmaDataService.initialize(layout);
+        console.log(`[useLemmaGraph] Initializing...`);
+        await lemmaDataService.initialize();
 
         // Get all lemmas
         const allLemmas = lemmaDataService.getAllLemmas();
@@ -62,7 +62,7 @@ export function useLemmaGraph(layout: LayoutType = 'deepwalk'): LemmaGraphData {
     };
 
     loadData();
-  }, [layout]);
+  }, []);
 
   return data;
 }

@@ -11,29 +11,31 @@ import {
 import ForceGraph3D from "react-force-graph-3d";
 import * as THREE from "three";
 import { ControlPanel } from "../ui/ControlPanel";
+import { RelationFilter } from "../ui/RelationFilter";
 import { useAppStore } from "../../store/appStore"; // <<< 🔥 MODE GLOBAL
+import { filterGraphLinks } from "../../utils/linkFilters";
 import type {
-  MultiScaleGraph,
+  UniverseGraphData,
   GraphData,
   GraphNode,
   GraphLink,
+  LevelId,
 } from "../../types/graph";
+import { galaxyDataService } from "../../services/GalaxyDataService";
 
 interface Props {
-  graph: MultiScaleGraph | null;
+  graphData: UniverseGraphData | null;
   width?: number;
   height?: number;
   backgroundColor?: string;
 }
-
-type LevelId = "supercluster" | "cluster" | "galaxy" | "planet";
 
 // Limite dure pour ne pas tuer le GPU
 const MAX_NODES_2D = 15000;
 
 
 export default function Map3D({
-  graph,
+  graphData,
   width = window.innerWidth,
   height = window.innerHeight,
   backgroundColor = "#050010",
@@ -49,15 +51,38 @@ export default function Map3D({
   const addExploredNode = useAppStore((s) => s.addExploredNode);
 
   // ================================================
-  // NIVEAUX FRACTAUX + MODE D'AFFICHAGE
+  // FILTRAGE DES RELATIONS
   // ================================================
-  const levels = graph?.levels ?? [];
+  const enabledRelationTypes = useAppStore((s) => s.enabledRelationTypes);
+  const toggleRelationType = useAppStore((s) => s.toggleRelationType);
+  const resetRelationFilter = useAppStore((s) => s.resetRelationFilter);
+
+  // ================================================
+  // INITIALIZE GALAXY SERVICE
+  // ================================================
+  useEffect(() => {
+    if (graphData) {
+      galaxyDataService.initialize(graphData);
+    }
+  }, [graphData]);
+
+  // ================================================
+  // NIVEAUX (2 niveaux: galaxy + star)
+  // ================================================
+  const levels = useMemo(() => {
+    if (!graphData) return [];
+    return [
+      { id: 'galaxy' as LevelId, data: graphData.galaxies },
+      { id: 'star' as LevelId, data: graphData.stars },
+    ];
+  }, [graphData]);
+
   const [levelIdx, setLevelIdx] = useState(0);
   const [zoomK, setZoomK] = useState(1); // pure info visuelle
   const [linksOnly, setLinksOnly] = useState(false);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
 
-  const currentLevelId: LevelId | undefined = levels[levelIdx]?.id as LevelId | undefined;
+  const currentLevelId: LevelId | undefined = levels[levelIdx]?.id;
 
   // ================================================
   // DATA NIVEAU COURANT (avant filtrage)
@@ -68,74 +93,110 @@ export default function Map3D({
   }, [levels, levelIdx]);
 
   // ================================================
-  // 🔥 MODE PLAY / STUDY — filtrage + downsample
+  // 🔥 MODE PLAY / STUDY — filtrage + downsample contextuel
   // ================================================
   const displayData: GraphData = useMemo(() => {
-    if (!rawData) return { nodes: [], links: [] };
+    if (!rawData || !graphData) return { nodes: [], links: [] };
 
-    let rawNodes = rawData.nodes;
+    const rawNodes = rawData.nodes;
     const rawLinks = rawData.links || [];
 
-    // --- MODE STUDY : on montre tout le niveau courant (avec downsample) ---
+    // --- MODE STUDY : on montre tout le niveau courant (avec downsample global) ---
     if (mode === "study") {
-      if (rawNodes.length > MAX_NODES_2D) {
-        const step = Math.ceil(rawNodes.length / MAX_NODES_2D);
-        rawNodes = rawNodes.filter((_, i) => i % step === 0);
+      let nodes = rawNodes;
+
+      // Downsampling global si trop de stars
+      if (currentLevelId === 'star' && nodes.length > MAX_NODES_2D) {
+        const step = Math.ceil(nodes.length / MAX_NODES_2D);
+        nodes = nodes.filter((_, i) => i % step === 0);
+        console.log(`[Map3D/study/star] Downsampled: ${rawNodes.length} → ${nodes.length}`);
       }
 
       // Filtrer les liens pour ne garder que ceux entre nœuds visibles
-      const nodeIdSet = new Set(rawNodes.map(n => String(n.id)));
-      const filteredLinks = rawLinks.filter(link =>
+      const nodeIdSet = new Set(nodes.map(n => String(n.id)));
+      let filteredLinks = rawLinks.filter(link =>
         nodeIdSet.has(String(link.source)) && nodeIdSet.has(String(link.target))
       );
 
-      return { nodes: rawNodes, links: filteredLinks };
+      // Appliquer le filtrage par type de relation (niveau star uniquement)
+      if (currentLevelId === 'star') {
+        filteredLinks = filterGraphLinks(filteredLinks, enabledRelationTypes);
+      }
+
+      return { nodes, links: filteredLinks };
     }
 
     // --- MODE PLAY : montrer les nœuds visibles de Navigation ---
     if (!visibleNavigationNodeIds.length) {
-      // Rien encore visible dans Navigation → rien à afficher
       return { nodes: [], links: [] };
     }
 
     const visibleSet = new Set(visibleNavigationNodeIds.map(String));
 
-    // Si on est au niveau planet, on affiche les nœuds visibles de Navigation
-    if (currentLevelId === "planet") {
-      const nodes = rawNodes.filter((n) =>
-        visibleSet.has(String(n.id))
-      );
+    // NIVEAU GALAXY : filtrer les galaxies contenant des étoiles visibles
+    if (currentLevelId === "galaxy") {
+      const visibleGalaxies = rawNodes.filter(galaxy => {
+        return galaxyDataService.hasVisibleStars(galaxy.id, visibleSet);
+      });
 
-      // Filtrer les liens pour ne garder que ceux entre nœuds visibles
-      const nodeIdSet = new Set(nodes.map(n => String(n.id)));
+      // Filtrer les liens entre galaxies visibles
+      const galaxyIdSet = new Set(visibleGalaxies.map(g => String(g.id)));
       const filteredLinks = rawLinks.filter(link =>
-        nodeIdSet.has(String(link.source)) && nodeIdSet.has(String(link.target))
+        galaxyIdSet.has(String(link.source)) && galaxyIdSet.has(String(link.target))
       );
 
-      console.log(`[Map3D/play/planet] ${nodes.length} nœuds visibles, ${filteredLinks.length} liens (sur ${visibleNavigationNodeIds.length} dans Navigation)`);
+      console.log(`[Map3D/play/galaxy] ${visibleGalaxies.length} galaxies contiennent des étoiles visibles`);
 
-      return { nodes, links: filteredLinks };
+      return { nodes: visibleGalaxies, links: filteredLinks };
     }
 
-    // Sinon (supercluster/cluster/galaxy) : filtrer les clusters contenant des nœuds visibles
-    const filteredClusters = rawNodes.filter((cluster) => {
-      const members = cluster.members ?? [];
-      // Garder le cluster si au moins un de ses membres est visible dans Navigation
-      return members.some((memberId) => visibleSet.has(String(memberId)));
-    });
+    // NIVEAU STAR : afficher les étoiles visibles avec cap par galaxie
+    if (currentLevelId === "star") {
+      const MAX_STARS_PER_GALAXY = 2000;
 
-    // Filtrer les liens pour ne garder que ceux entre clusters visibles
-    const clusterIdSet = new Set(filteredClusters.map(n => String(n.id)));
-    const filteredLinks = rawLinks.filter(link =>
-      clusterIdSet.has(String(link.source)) && clusterIdSet.has(String(link.target))
-    );
+      // Regrouper les stars visibles par galaxie
+      const starsByGalaxy = new Map<string, GraphNode[]>();
 
-    console.log(
-      `[Map3D/play/${currentLevelId}] ${filteredClusters.length} clusters contiennent des nœuds visibles, ${filteredLinks.length} liens (sur ${rawNodes.length} total)`
-    );
+      for (const star of rawNodes) {
+        if (!visibleSet.has(String(star.id))) continue;
 
-    return { nodes: filteredClusters, links: filteredLinks };
-  }, [rawData, mode, visibleNavigationNodeIds, currentLevelId]);
+        const starNode = graphData.starIndex.get(star.id);
+        if (!starNode) continue;
+
+        const galaxyId = starNode.galaxy;
+        if (!starsByGalaxy.has(galaxyId)) {
+          starsByGalaxy.set(galaxyId, []);
+        }
+        starsByGalaxy.get(galaxyId)!.push(star);
+      }
+
+      // Limiter chaque galaxie à MAX_STARS_PER_GALAXY (downsampling par galaxie)
+      const cappedStars: GraphNode[] = [];
+      starsByGalaxy.forEach((stars, galaxyId) => {
+        if (stars.length <= MAX_STARS_PER_GALAXY) {
+          cappedStars.push(...stars);
+        } else {
+          const step = Math.ceil(stars.length / MAX_STARS_PER_GALAXY);
+          const sampled = stars.filter((_, i) => i % step === 0);
+          cappedStars.push(...sampled);
+          console.log(`[Map3D/play/star] Galaxy ${galaxyId}: ${stars.length} → ${sampled.length} stars`);
+        }
+      });
+
+      // Filtrer les liens + relation types
+      const nodeIdSet = new Set(cappedStars.map(n => String(n.id)));
+      let filteredLinks = rawLinks.filter(link =>
+        nodeIdSet.has(String(link.source)) && nodeIdSet.has(String(link.target))
+      );
+      filteredLinks = filterGraphLinks(filteredLinks, enabledRelationTypes);
+
+      console.log(`[Map3D/play/star] ${cappedStars.length} étoiles affichées, ${filteredLinks.length} liens`);
+
+      return { nodes: cappedStars, links: filteredLinks };
+    }
+
+    return { nodes: [], links: [] };
+  }, [rawData, graphData, mode, visibleNavigationNodeIds, currentLevelId, enabledRelationTypes]);
 
 
   // ================================================
@@ -251,11 +312,9 @@ export default function Map3D({
     scene.add(helper);
 
     const levelDistanceFactor =
-      currentLevelId === "supercluster" ? 6.0 :
-        currentLevelId === "cluster" ? 5.0 :
-          currentLevelId === "galaxy" ? 4.0 :
-            currentLevelId === "planet" ? 3.5 :
-              2.8;
+      currentLevelId === "galaxy" ? 5.0 :
+        currentLevelId === "star" ? 3.5 :
+          2.8;
 
     const dist = radiusMean * levelDistanceFactor;
 
@@ -286,11 +345,9 @@ export default function Map3D({
     const density = d > 0 ? d : intensityFromDeg;
 
     const levelScale =
-      currentLevelId === "supercluster" ? 3.5 :
-        currentLevelId === "cluster" ? 3.0 :
-          currentLevelId === "galaxy" ? 2.3 :
-            currentLevelId === "planet" ? 1.6 :
-              1.2;
+      currentLevelId === "galaxy" ? 3.0 :
+        currentLevelId === "star" ? 1.6 :
+          1.2;
 
     const baseR = 0.7 * levelScale;
     const intensity = 0.35 + 0.65 * density;
@@ -329,10 +386,8 @@ export default function Map3D({
     const w = parseInt(link.relType?.replace("w", "") ?? "1", 10) || 1;
 
     const baseAlpha =
-      currentLevelId === "supercluster" ? 0.25 :
-        currentLevelId === "cluster" ? 0.22 :
-          currentLevelId === "galaxy" ? 0.18 :
-            0.12;
+      currentLevelId === "galaxy" ? 0.22 :
+        0.12;
 
     const alpha = Math.min(baseAlpha + w * 0.01, 0.4);
     return `rgba(255,210,150,${alpha})`;
@@ -425,6 +480,15 @@ export default function Map3D({
             Afficher uniquement les liens
           </label>
         </div>
+
+        {/* Filtre de types de relations - niveau star uniquement */}
+        {currentLevelId === 'star' && (
+          <RelationFilter
+            enabledTypes={enabledRelationTypes}
+            onToggle={toggleRelationType}
+            onReset={resetRelationFilter}
+          />
+        )}
       </ControlPanel>
 
       {!displayData.nodes.length ? (

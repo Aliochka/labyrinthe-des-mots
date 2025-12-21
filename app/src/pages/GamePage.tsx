@@ -5,7 +5,7 @@ import { Navigation } from '../components/graph/Navigation';
 import { GraphExploration } from '../components/graph/GraphExploration';
 import Map2D from '../components/graph/Map2D';
 import Map3D from '../components/graph/Map3D';
-import { useMultiScaleGraph } from '../hooks/useMultiScaleGraph';
+import { useUniverseGraph } from '../hooks/useUniverseGraph';
 import { PageLayout, type Tab } from '../components/ui/PageLayout';
 
 const randomWords = [
@@ -31,10 +31,10 @@ export const GamePage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
-  // Charger le graphe multiscale (seulement pour Map2D et Map3D)
+  // Charger le graphe universe (seulement pour Map2D et Map3D)
   const shouldLoadGraph = activeTabId === 'map2d' || activeTabId === 'map3d';
-  const { graph: multiScaleGraph, isLoading: isLoadingGraph } =
-    useMultiScaleGraph(shouldLoadGraph);
+  const { graphData, isLoading: isLoadingGraph } =
+    useUniverseGraph(shouldLoadGraph);
 
   const tabs: Tab[] = [
     {
@@ -52,7 +52,7 @@ export const GamePage: React.FC = () => {
       id: 'map2d',
       label: 'Map 2D',
       content:
-        isLoadingGraph || !multiScaleGraph ? (
+        isLoadingGraph || !graphData ? (
           <div
             style={{
               width: '100%',
@@ -66,7 +66,7 @@ export const GamePage: React.FC = () => {
           </div>
         ) : (
           <Map2D
-            graph={multiScaleGraph}
+            graphData={graphData}
             width={window.innerWidth}
             height={window.innerHeight - 48}
           />
@@ -76,7 +76,7 @@ export const GamePage: React.FC = () => {
       id: 'map3d',
       label: 'Map 3D',
       content:
-        isLoadingGraph || !multiScaleGraph ? (
+        isLoadingGraph || !graphData ? (
           <div
             style={{
               width: '100%',
@@ -90,7 +90,7 @@ export const GamePage: React.FC = () => {
           </div>
         ) : (
           <Map3D
-            graph={multiScaleGraph}
+            graphData={graphData}
             width={window.innerWidth}
             height={window.innerHeight - 48}
           />

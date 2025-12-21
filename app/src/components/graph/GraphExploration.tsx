@@ -4,6 +4,9 @@ import * as THREE from 'three';
 import { lemmaDataService } from '../../services/LemmaDataService';
 import type { LemmaNode } from '../../types/lemma';
 import { useAppStore } from '../../store/appStore';
+import { ControlPanel } from '../ui/ControlPanel';
+import { RelationFilter } from '../ui/RelationFilter';
+import { filterLemmaEdges } from '../../utils/linkFilters';
 
 // Position scale for the atlas
 const POSITION_SCALE = 5;
@@ -50,6 +53,11 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
   // Lecture du mode et des mots découverts depuis le store
   const mode = useAppStore((s) => s.mode);
   const visibleNavigationNodeIds = useAppStore((s) => s.visibleNavigationNodeIds);
+
+  // Filtrage des relations
+  const enabledRelationTypes = useAppStore((s) => s.enabledRelationTypes);
+  const toggleRelationType = useAppStore((s) => s.toggleRelationType);
+  const resetRelationFilter = useAppStore((s) => s.resetRelationFilter);
 
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
   const [isLoading, setIsLoading] = useState(true);
@@ -119,8 +127,9 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
         }
       });
 
-      // 3) Add relations
-      expansion.relations.forEach(rel => {
+      // 3) Filter and add relations
+      const filteredRelations = filterLemmaEdges(expansion.relations, enabledRelationTypes);
+      filteredRelations.forEach(rel => {
         if (
           !currentLinks.find(
             l => l.source === rel.source && l.target === rel.target
@@ -218,8 +227,9 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
               }
             });
 
-            // Add relations
-            expansion.relations.forEach(rel => {
+            // Filter and add relations
+            const filteredRelations = filterLemmaEdges(expansion.relations, enabledRelationTypes);
+            filteredRelations.forEach(rel => {
               if (!links.find(l => l.source === rel.source && l.target === rel.target)) {
                 links.push({
                   source: rel.source,
@@ -250,7 +260,8 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
             const nodeIdSet = new Set(nodes.map(n => n.id));
             for (const nodeId of nodeIdSet) {
               const edges = lemmaDataService.getLemmaEdges(nodeId);
-              edges.forEach(edge => {
+              const filteredEdges = filterLemmaEdges(edges, enabledRelationTypes);
+              filteredEdges.forEach(edge => {
                 const targetInGraph = nodeIdSet.has(edge.target);
                 if (targetInGraph && !links.find(l => l.source === edge.source && l.target === edge.target)) {
                   links.push({
@@ -277,7 +288,7 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
 
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, initialQuery]);
+  }, [mode, initialQuery, enabledRelationTypes]);
 
   // Dynamic update when new words are discovered in Navigation (play mode only)
   useEffect(() => {
@@ -302,10 +313,11 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
         }
       }
 
-      // Add links between visible nodes
+      // Add filtered links between visible nodes
       for (const nodeId of currentNodeIds) {
         const edges = lemmaDataService.getLemmaEdges(nodeId);
-        edges.forEach(edge => {
+        const filteredEdges = filterLemmaEdges(edges, enabledRelationTypes);
+        filteredEdges.forEach(edge => {
           const targetInGraph = currentNodeIds.has(edge.target);
           const linkExists = newLinks.find(l => l.source === edge.source && l.target === edge.target);
           if (targetInGraph && !linkExists) {
@@ -322,7 +334,7 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
 
       return { nodes: newNodes, links: newLinks };
     });
-  }, [mode, visibleNavigationNodeIds]);
+  }, [mode, visibleNavigationNodeIds, enabledRelationTypes]);
 
   // Helper functions
   const createGraphNode = (lemma: LemmaNode, isCenter: boolean): GraphNode => {
@@ -420,46 +432,52 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
 
   return (
     <div style={{ position: 'relative', width, height }}>
-      {/* Mode indicator and stats */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 10,
-          left: 10,
-          background: 'rgba(0, 0, 0, 0.7)',
-          color: '#f5f5f5',
-          padding: '8px 12px',
-          borderRadius: '6px',
-          fontSize: '13px',
-          fontFamily: 'monospace',
-          zIndex: 1000,
-          pointerEvents: 'none'
-        }}
+      {/* Control Panel with mode stats and relation filter */}
+      <ControlPanel
+        title="Exploration"
+        position="top-left"
+        controls={[
+          { keys: 'Clic', description: 'Sélectionner' },
+          { keys: 'Glisser', description: 'Pivoter' },
+          mode === 'study'
+            ? { keys: 'ESPACE', description: 'Étendre' }
+            : { keys: 'Navigation', description: 'Découvrir' }
+        ]}
       >
-        {mode === 'play' ? (
-          <div>
-            <div style={{ color: '#4ecdc4', fontWeight: 'bold' }}>MODE: PLAY</div>
-            <div>Découverts: {graphData.nodes.length} mots</div>
-            <div>Liens: {graphData.links.length}</div>
-            {graphData.nodes.length === 1 && (
-              <div style={{ marginTop: 4, color: '#ffaa00' }}>
-                → Naviguez pour découvrir des mots !
-              </div>
-            )}
-          </div>
-        ) : (
-          <div>
-            <div style={{ color: '#ff6b6b', fontWeight: 'bold' }}>MODE: STUDY</div>
-            <div>Exploration: {graphData.nodes.length} nœuds</div>
-            <div>Liens: {graphData.links.length}</div>
-            {selectedNodeId && (
-              <div style={{ marginTop: 4, color: '#ffaa00' }}>
-                → Appuyez sur ESPACE pour étendre
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+        {/* Mode stats */}
+        <div style={{ marginTop: '12px', color: '#f5f5f5', fontSize: '12px' }}>
+          {mode === 'play' ? (
+            <>
+              <div style={{ color: '#4ecdc4', fontWeight: 'bold' }}>MODE: PLAY</div>
+              <div>Découverts: {graphData.nodes.length} mots</div>
+              <div>Liens: {graphData.links.length}</div>
+              {graphData.nodes.length === 1 && (
+                <div style={{ marginTop: 4, color: '#ffaa00' }}>
+                  → Naviguez pour découvrir des mots !
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <div style={{ color: '#ff6b6b', fontWeight: 'bold' }}>MODE: STUDY</div>
+              <div>Exploration: {graphData.nodes.length} nœuds</div>
+              <div>Liens: {graphData.links.length}</div>
+              {selectedNodeId && (
+                <div style={{ marginTop: 4, color: '#ffaa00' }}>
+                  → Appuyez sur ESPACE pour étendre
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Relation Filter */}
+        <RelationFilter
+          enabledTypes={enabledRelationTypes}
+          onToggle={toggleRelationType}
+          onReset={resetRelationFilter}
+        />
+      </ControlPanel>
 
       <ForceGraph3D
         ref={forceGraphRef}

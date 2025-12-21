@@ -7,21 +7,20 @@ import { Delaunay } from "d3-delaunay";
 import { ControlPanel } from "../ui/ControlPanel";
 import { useAppStore } from "../../store/appStore";
 import type {
-    MultiScaleGraph,
+    UniverseGraphData,
     GraphData,
     GraphNode,
     GraphLink,
+    LevelId,
 } from "../../types/graph";
+import { galaxyDataService } from "../../services/GalaxyDataService";
 
 interface Props {
-    graph: MultiScaleGraph | null;
+    graphData: UniverseGraphData | null;
     width?: number;
     height?: number;
     backgroundColor?: string;
 }
-
-// ⚠️ nouveaux ids de niveaux côté multiscale
-type LevelId = "supercluster" | "cluster" | "galaxy" | "planet";
 
 // limites pour ne pas exploser le canvas
 const MAX_NODES_2D = 15000;
@@ -128,7 +127,7 @@ const computeVoronoi = (nodes: GraphNode[], width: number, height: number) => {
 
 
 export default function Map2D({
-    graph,
+    graphData,
     width = window.innerWidth,
     height = window.innerHeight,
     backgroundColor = "#050510",
@@ -141,6 +140,15 @@ export default function Map2D({
     const visibleNavigationNodeIds = useAppStore((s) => s.visibleNavigationNodeIds);
     const addExploredNode = useAppStore((s) => s.addExploredNode);
 
+    // ================================================
+    // INITIALIZE GALAXY SERVICE
+    // ================================================
+    useEffect(() => {
+        if (graphData) {
+            galaxyDataService.initialize(graphData);
+        }
+    }, [graphData]);
+
     const exploredIdSet = useMemo(
         () => new Set(exploredNodeIds.map(String)),
         [exploredNodeIds]
@@ -151,23 +159,24 @@ export default function Map2D({
         [visibleNavigationNodeIds]
     );
 
-    const levels = graph?.levels ?? [];
+    // ================================================
+    // NIVEAUX (2 niveaux: galaxy + star)
+    // ================================================
+    const levels = useMemo(() => {
+        if (!graphData) return [];
+        return [
+            { id: 'galaxy' as LevelId, data: graphData.galaxies },
+            { id: 'star' as LevelId, data: graphData.stars },
+        ];
+    }, [graphData]);
+
     const [levelIdx, setLevelIdx] = useState(0);
     const [zoomK, setZoomK] = useState(1);
     const [isInitialized, setIsInitialized] = useState(false);
     const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
 
     // Niveau courant basé sur levelIdx (même logique pour Study et Play)
-    const currentLevelId: LevelId | undefined = levels[levelIdx]
-        ?.id as LevelId | undefined;
-
-    // Niveau "planet" (le plus fin, pour référence des membres)
-    const planetLevel = useMemo(() => {
-        if (!levels.length) return null;
-        return (
-            levels.find((l) => l.id === "planet") ?? levels[levels.length - 1] ?? null
-        );
-    }, [levels]);
+    const currentLevelId: LevelId | undefined = levels[levelIdx]?.id;
 
     // ================================================
     // DATA NIVEAU COURANT
@@ -182,19 +191,22 @@ export default function Map2D({
     }, [levels, levelIdx, mode]);
 
     // ================================================
-    // 🔥 MODE PLAY / STUDY — filtrage + voisinage
+    // 🔥 MODE PLAY / STUDY — filtrage contextuel
     // ================================================
     const displayData: GraphData = useMemo(() => {
-        if (!rawData) return { nodes: [], links: [] };
+        if (!rawData || !graphData) return { nodes: [], links: [] };
 
         const rawNodes = rawData.nodes;
 
         // --- MODE STUDY : on montre le niveau courant (avec downsample global) ---
         if (mode === "study") {
             let nodes = rawNodes;
-            if (nodes.length > MAX_NODES_2D) {
+
+            // Downsampling global si trop de stars
+            if (currentLevelId === 'star' && nodes.length > MAX_NODES_2D) {
                 const step = Math.ceil(nodes.length / MAX_NODES_2D);
                 nodes = nodes.filter((_, i) => i % step === 0);
+                console.log(`[Map2D/study/star] Downsampled: ${rawNodes.length} → ${nodes.length}`);
             }
 
             const normalized = normalizeNodesForCanvas(nodes, width, height);
@@ -202,40 +214,67 @@ export default function Map2D({
         }
 
         // --- MODE PLAY : montrer les nœuds visibles de Navigation ---
-        if (!rawNodes.length) return { nodes: [], links: [] };
-
         if (!visibleNavigationNodeIds.length) {
-            // Rien encore visible dans Navigation → rien à afficher
             return { nodes: [], links: [] };
         }
 
-        // Si on est au niveau planet, on affiche les nœuds visibles de Navigation
-        if (currentLevelId === "planet") {
-            const visibleNodes = rawNodes.filter((n) =>
-                visibleIdSet.has(String(n.id))
-            );
+        const visibleSet = new Set(visibleNavigationNodeIds.map(String));
 
-            const normalized = normalizeNodesForCanvas(visibleNodes, width, height);
+        // NIVEAU GALAXY : filtrer les galaxies contenant des étoiles visibles
+        if (currentLevelId === "galaxy") {
+            const visibleGalaxies = rawNodes.filter(galaxy => {
+                return galaxyDataService.hasVisibleStars(galaxy.id, visibleSet);
+            });
 
-            console.log(`[Map2D/play/planet] ${visibleNodes.length} nœuds visibles (sur ${visibleNavigationNodeIds.length} dans Navigation)`);
+            const normalized = normalizeNodesForCanvas(visibleGalaxies, width, height);
+
+            console.log(`[Map2D/play/galaxy] ${visibleGalaxies.length} galaxies contiennent des étoiles visibles`);
 
             return { nodes: normalized, links: [] };
         }
 
-        // Sinon (supercluster/cluster/galaxy) : filtrer les clusters contenant des nœuds visibles
-        const filteredClusters = rawNodes.filter((cluster) => {
-            const members = cluster.members ?? [];
-            // Garder le cluster si au moins un de ses membres est visible dans Navigation
-            return members.some((memberId) => visibleIdSet.has(String(memberId)));
-        });
+        // NIVEAU STAR : afficher les étoiles visibles avec cap par galaxie
+        if (currentLevelId === "star") {
+            const MAX_STARS_PER_GALAXY = 2000;
 
-        console.log(
-            `[Map2D/play/${currentLevelId}] ${filteredClusters.length} clusters contiennent des nœuds visibles (sur ${rawNodes.length} total)`
-        );
+            // Regrouper les stars visibles par galaxie
+            const starsByGalaxy = new Map<string, GraphNode[]>();
 
-        const normalized = normalizeNodesForCanvas(filteredClusters, width, height);
-        return { nodes: normalized, links: [] };
-    }, [rawData, mode, visibleIdSet, visibleNavigationNodeIds, planetLevel, currentLevelId, width, height]);
+            for (const star of rawNodes) {
+                if (!visibleSet.has(String(star.id))) continue;
+
+                const starNode = graphData.starIndex.get(star.id);
+                if (!starNode) continue;
+
+                const galaxyId = starNode.galaxy;
+                if (!starsByGalaxy.has(galaxyId)) {
+                    starsByGalaxy.set(galaxyId, []);
+                }
+                starsByGalaxy.get(galaxyId)!.push(star);
+            }
+
+            // Limiter chaque galaxie à MAX_STARS_PER_GALAXY
+            const cappedStars: GraphNode[] = [];
+            starsByGalaxy.forEach((stars, galaxyId) => {
+                if (stars.length <= MAX_STARS_PER_GALAXY) {
+                    cappedStars.push(...stars);
+                } else {
+                    const step = Math.ceil(stars.length / MAX_STARS_PER_GALAXY);
+                    const sampled = stars.filter((_, i) => i % step === 0);
+                    cappedStars.push(...sampled);
+                    console.log(`[Map2D/play/star] Galaxy ${galaxyId}: ${stars.length} → ${sampled.length} stars`);
+                }
+            });
+
+            const normalized = normalizeNodesForCanvas(cappedStars, width, height);
+
+            console.log(`[Map2D/play/star] ${cappedStars.length} étoiles affichées`);
+
+            return { nodes: normalized, links: [] };
+        }
+
+        return { nodes: [], links: [] };
+    }, [rawData, graphData, mode, visibleNavigationNodeIds, currentLevelId, width, height]);
 
     // ================================================
     // CALCUL VORONOI (sur données finales)
@@ -257,14 +296,12 @@ export default function Map2D({
 
 
     // ================================================
-    // LOGIQUE DE ZOOM → NIVEAUX (transitions fluides)
+    // LOGIQUE DE ZOOM → NIVEAUX (2 niveaux: galaxy / star)
     // ================================================
-    // Seuils ajustés pour permettre de voir tous les niveaux :
-    // - supercluster (idx 0) : zoom 0.5 - 2
-    // - cluster (idx 1) : zoom 2 - 5
-    // - galaxy (idx 2) : zoom 5 - 12
-    // - planet (idx 3) : zoom > 12
-    const thresholds = [2, 5, 12];
+    // Seuil unique :
+    // - galaxy (idx 0) : zoom < 5
+    // - star (idx 1) : zoom >= 5
+    const ZOOM_THRESHOLD = 5;
     const lastZoomUpdate = useRef(0);
 
     const updateLevelFromZoom = (k: number) => {
@@ -273,14 +310,9 @@ export default function Map2D({
             return;
         }
 
-        let idx = 0;
-        if (k >= thresholds[0]) idx = 1;
-        if (k >= thresholds[1]) idx = 2;
-        if (k >= thresholds[2]) idx = 3;
+        const newIdx = k >= ZOOM_THRESHOLD ? 1 : 0; // 0 = galaxy, 1 = star
 
-        const newIdx = Math.min(idx, levels.length - 1);
-
-        console.log(`[updateLevelFromZoom] k=${k.toFixed(2)}, calculated idx=${idx}, clamped=${newIdx}, current=${levelIdx}, thresholds=[${thresholds}]`);
+        console.log(`[updateLevelFromZoom] k=${k.toFixed(2)}, newIdx=${newIdx}, current=${levelIdx}, threshold=${ZOOM_THRESHOLD}`);
 
         if (newIdx !== levelIdx) {
             const now = Date.now();

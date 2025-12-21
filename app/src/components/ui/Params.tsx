@@ -1,20 +1,16 @@
 // src/components/ui/Params.tsx
 /**
  * Panneau de paramètres globaux :
- * - Layout 3D (deepwalk, random, noise)
  * - Mode (play/study) avec navigation
  */
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store/appStore';
-import type { LayoutType } from '../../services/LemmaDataService';
 
 export const Params: React.FC = () => {
   const navigate = useNavigate();
   const isOpen = useAppStore((s) => s.isSettingsOpen);
   const toggleSettings = useAppStore((s) => s.toggleSettings);
-  const layout = useAppStore((s) => s.layout);
-  const setLayout = useAppStore((s) => s.setLayout);
   const mode = useAppStore((s) => s.mode);
   const setMode = useAppStore((s) => s.setMode);
 
@@ -147,52 +143,6 @@ export const Params: React.FC = () => {
                 🎮 Play
               </button>
             </div>
-          </div>
-
-          {/* Layout 3D */}
-          <div>
-            <label
-              style={{
-                display: 'block',
-                fontSize: 14,
-                fontWeight: 500,
-                marginBottom: 8,
-                color: '#4ecdc4',
-              }}
-            >
-              Layout 3D (Navigation)
-            </label>
-            <select
-              value={layout}
-              onChange={(e) => setLayout(e.target.value as LayoutType)}
-              style={{
-                width: '100%',
-                padding: '10px 12px',
-                fontSize: 14,
-                border: '1px solid rgba(255, 255, 255, 0.2)',
-                borderRadius: 6,
-                background: 'rgba(0, 0, 0, 0.5)',
-                color: '#f5f5f5',
-                cursor: 'pointer',
-              }}
-            >
-              <option value="deepwalk">DeepWalk - Chemins</option>
-              <option value="random">Random - Aléatoire</option>
-              <option value="noise">Perlin Noise - Organique</option>
-            </select>
-            <p
-              style={{
-                fontSize: 12,
-                color: '#999',
-                margin: '8px 0 0 0',
-                lineHeight: 1.4,
-              }}
-            >
-              {layout === 'deepwalk' &&
-                'Basé sur des random walks dans le graphe sémantique'}
-              {layout === 'random' && 'Distribution aléatoire dans l\'espace'}
-              {layout === 'noise' && 'Distribution organique via champ de force Perlin'}
-            </p>
           </div>
 
           {/* Info */}

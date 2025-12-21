@@ -70,6 +70,7 @@ export interface GraphLink {
   source: string | number;
   target: string | number;
   relType?: string;
+  relationTypes?: string[];  // Pour les liens de niveau planet avec types multiples
 }
 
 export interface GraphData {
@@ -86,4 +87,55 @@ export interface MultiScaleGraphLevel {
 
 export interface MultiScaleGraph {
   levels: MultiScaleGraphLevel[];
+}
+
+// ===== NEW UNIVERSE SYSTEM (2 levels: galaxy + star) =====
+
+// Level identifiers for the new 2-level system
+export type LevelId = 'galaxy' | 'star';
+
+// Galaxy node from universe.json
+export interface GalaxyNode {
+  id: string;          // ex: "gc_0"
+  name: string;        // ex: "Droit & Loi"
+  slug: string;        // ex: "droit_loi"
+  confidence: number;  // ex: 0.6
+  size: number;        // nombre d'étoiles
+  x: number;
+  y: number;
+  z: number;
+}
+
+// Star node from universe.json
+export interface StarNode {
+  id: string;      // lemme (ex: "vie")
+  galaxy: string;  // ID de la galaxie parente (ex: "gc_0")
+  x: number;
+  y: number;
+  z: number;
+}
+
+// Structure of universe.json
+export interface UniverseData {
+  meta: {
+    galaxies: number;
+    stars: number;
+  };
+  galaxies: GalaxyNode[];
+  stars: StarNode[];
+}
+
+// Unified graph data structure (replaces MultiScaleGraph legacy)
+export interface UniverseGraphData {
+  galaxies: {
+    nodes: GraphNode[];
+    links: GraphLink[];
+  };
+  stars: {
+    nodes: GraphNode[];
+    links: GraphLink[];
+  };
+  // Performance indexes
+  galaxyMembersMap: Map<string, string[]>;  // galaxyId -> starIds[]
+  starIndex: Map<string, StarNode>;         // starId -> StarNode (O(1) lookup)
 }

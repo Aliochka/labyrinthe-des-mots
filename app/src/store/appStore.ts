@@ -1,10 +1,13 @@
 // src/store/appStore.ts
 import { create } from "zustand";
 import type { AppMode } from "../types/mode";
-import type { GraphLink } from "../types/graph"; // 👈 si tu veux suivre les liens
-import type { LayoutType } from "../services/LemmaDataService";
+import type { GraphLink } from "../types/graph";
+import { getDefaultEnabledRelations } from "../constants/relationTypes";
 
 const linkKey = (l: GraphLink) => `${l.source}-${l.target}`;
+
+// Version du store pour gérer les migrations
+const STORE_VERSION = 2;
 
 interface AppState {
     // --- mode global ---
@@ -26,13 +29,19 @@ interface AppState {
     visibleNavigationNodeIds: string[];
     setVisibleNavigationNodeIds: (ids: string[]) => void;
 
-    // --- layout 3D (utilisé par Navigation + Maps 2D/3D) ---
-    layout: LayoutType;
-    setLayout: (layout: LayoutType) => void;
-
     // --- settings panel ---
     isSettingsOpen: boolean;
     toggleSettings: () => void;
+
+    // --- relation filtering ---
+    enabledRelationTypes: Set<string>;
+    toggleRelationType: (relationType: string) => void;
+    setEnabledRelationTypes: (types: Set<string>) => void;
+    resetRelationFilter: () => void;
+
+    // --- versioning & migration ---
+    storeVersion: number;
+    migrateStore: () => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -77,9 +86,60 @@ export const useAppStore = create<AppState>((set, get) => ({
     visibleNavigationNodeIds: [],
     setVisibleNavigationNodeIds: (ids) => set({ visibleNavigationNodeIds: ids }),
 
-    layout: "deepwalk",
-    setLayout: (layout) => set({ layout }),
-
     isSettingsOpen: false,
     toggleSettings: () => set((state) => ({ isSettingsOpen: !state.isSettingsOpen })),
+
+    enabledRelationTypes: getDefaultEnabledRelations(),
+
+    toggleRelationType: (relationType) => {
+        const { enabledRelationTypes } = get();
+        const next = new Set(enabledRelationTypes);
+        if (next.has(relationType)) {
+            next.delete(relationType);
+        } else {
+            next.add(relationType);
+        }
+        set({ enabledRelationTypes: next });
+    },
+
+    setEnabledRelationTypes: (types) => set({ enabledRelationTypes: types }),
+
+    resetRelationFilter: () =>
+        set({ enabledRelationTypes: getDefaultEnabledRelations() }),
+
+    // --- versioning & migration ---
+    storeVersion: STORE_VERSION,
+
+    migrateStore: () => {
+        const currentVersion = get().storeVersion;
+
+        // Migration v1 → v2 (suppression multiscale + layout)
+        if (currentVersion < 2) {
+            console.log('[Migration] Migrating store from v1 to v2...');
+
+            // Nettoyer l'ancien système de layout
+            if (typeof window !== 'undefined') {
+                localStorage.removeItem('layout');
+
+                // Supprimer les refs multiscale
+                const keys = Object.keys(localStorage);
+                keys.forEach(key => {
+                    if (key.includes('multiscale') || key.includes('levelIdx') || key.includes('layout')) {
+                        console.log(`[Migration] Removing legacy key: ${key}`);
+                        localStorage.removeItem(key);
+                    }
+                });
+            }
+
+            // Mettre à jour la version
+            set({ storeVersion: 2 });
+
+            console.log('[Migration] ✓ Store migrated to v2 (universe.json)');
+        }
+    }
 }));
+
+// Exécuter la migration au démarrage (côté client uniquement)
+if (typeof window !== 'undefined') {
+    useAppStore.getState().migrateStore();
+}

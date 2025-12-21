@@ -17,7 +17,7 @@ import type {
   LemmaExpandResponse
 } from '../types/lemma';
 
-export type LayoutType = 'deepwalk' | 'random' | 'noise';
+// Removed LayoutType - now using single universe.json
 
 /**
  * Main service for lemma-centric data access
@@ -25,15 +25,14 @@ export type LayoutType = 'deepwalk' | 'random' | 'noise';
 export class LemmaDataService {
   private isInitialized = false;
   private data: LemmaRawData | null = null;
-  private currentLayout: LayoutType = 'random';
 
   /**
-   * Initialize the service by loading the lemma atlas from /public/lemma-atlas.json
+   * Initialize the service by loading the lemma atlas and positions from universe.json
    */
-  async initialize(layout: LayoutType = 'random'): Promise<void> {
-    if (this.isInitialized && this.currentLayout === layout) return;
+  async initialize(): Promise<void> {
+    if (this.isInitialized) return;
 
-    console.log(`[LOAD] Initializing LemmaDataService with layout: ${layout}...`);
+    console.log(`[LOAD] Initializing LemmaDataService...`);
 
     this.data = {
       lemmaNodes: new Map(),
@@ -41,15 +40,13 @@ export class LemmaDataService {
       lemmaPositions: new Map()
     };
 
-    this.currentLayout = layout;
     await this.loadLemmaAtlas();
     this.isInitialized = true;
 
     console.log(`[OK] LemmaDataService initialized:`, {
       lemmas: this.data.lemmaNodes.size,
       relations: this.data.lemmaRelations.size,
-      positions: this.data.lemmaPositions.size,
-      layout: this.currentLayout
+      positions: this.data.lemmaPositions.size
     });
   }
 
@@ -65,26 +62,30 @@ export class LemmaDataService {
       }
       const atlas: LemmaAtlas = await graphResponse.json();
 
-      // Load positions from multiscale file based on layout
-      const positionsFile = `/multiscale-${this.currentLayout}.json`;
-      const positionsResponse = await fetch(positionsFile);
-      if (!positionsResponse.ok) {
-        throw new Error(`Failed to load positions from ${positionsFile}: ${positionsResponse.status}`);
+      // Load positions from universe.json
+      const universeResponse = await fetch('/universe.json');
+      if (!universeResponse.ok) {
+        throw new Error(`Failed to load universe.json: ${universeResponse.status}`);
       }
-      const multiscale = await positionsResponse.json();
+      const universe = await universeResponse.json();
 
-      // Extract positions from "planet" level (last level with all individual lemmas)
-      const planetLevel = multiscale.levels.find((level: any) => level.id === 'planet');
-      if (!planetLevel) {
-        throw new Error('Planet level not found in multiscale data');
-      }
-
+      // Extract positions from stars (star-level data)
       const positionsMap = new Map<string, { x: number; y: number; z: number }>();
-      for (const node of planetLevel.data.nodes) {
-        positionsMap.set(node.name, { x: node.x, y: node.y, z: node.z });
+      for (const star of universe.stars) {
+        // Only validate data integrity, no filtering on galaxy membership
+        // Filtering (void, visibility, play mode) happens at UI/renderer level
+        if (
+          typeof star?.id === 'string' &&
+          Number.isFinite(star?.x) &&
+          Number.isFinite(star?.y) &&
+          Number.isFinite(star?.z)
+        ) {
+          positionsMap.set(star.id, { x: star.x, y: star.y, z: star.z });
+        }
       }
 
-      console.log(`[POSITIONS] Loaded ${positionsMap.size} positions from multiscale`);
+      console.log(`[POSITIONS] Loaded ${positionsMap.size} positions from universe.json`);
+      console.log(`[POSITIONS] Test sample: a_la_fois =`, positionsMap.get('a_la_fois'));
 
       // Index nodes with positions
       for (const node of atlas.nodes) {

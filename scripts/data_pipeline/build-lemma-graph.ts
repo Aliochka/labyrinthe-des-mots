@@ -165,12 +165,25 @@ function isGarbageLemmaStrict(normalized: string): boolean {
 
   // pure numeric
   if (isNumericLikeLemma(normalized)) return true;
+  // ordinals / ranks like 1er, 2e, 12e, 2d, 3e, 100e
+  if (/^\d+(er|e|eme|ème|d)$/.test(normalized)) return true;
+
+  // too punctuation-heavy (ex: 1_e-3_s)
+  const punct = (normalized.match(/[_\-]/g) || []).length;
+  if (punct >= 3 && normalized.length <= 12) return true;
+
 
   // too short and no letter
   if (normalized.length <= 2 && !hasLetter(normalized)) return true;
 
   // no letter anywhere
   if (!hasLetter(normalized)) return true;
+
+  // HTML-escaped garbage
+  if (normalized.includes("&lt;") || normalized.includes("&gt;") || normalized.includes("&amp;")) return true;
+
+  if (/[<>[\]{}|]/.test(normalized)) return true;
+
 
   // core empty after removing separators
   const core = normalized.replace(/[_-]/g, "");
