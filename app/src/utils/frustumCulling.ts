@@ -10,26 +10,20 @@ import type { GraphNode } from '../types/graph';
  * @param camera - Caméra Three.js pour le calcul du frustum
  * @returns Liste des nœuds visibles dans le frustum
  */
-export function frustumCullNodes(
-  nodes: GraphNode[],
-  camera: THREE.Camera
-): GraphNode[] {
+export function frustumCullNodes(nodes: GraphNode[], camera: THREE.Camera): GraphNode[] {
   const frustum = new THREE.Frustum();
   const projScreenMatrix = new THREE.Matrix4();
 
-  // Calculer la matrice de projection combinée (projection × view)
-  projScreenMatrix.multiplyMatrices(
-    camera.projectionMatrix,
-    camera.matrixWorldInverse
-  );
+  projScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
   frustum.setFromProjectionMatrix(projScreenMatrix);
 
-  // Filtrer les nœuds dont la position est dans le frustum
-  return nodes.filter(node => {
-    // Skip nœuds sans position 3D
-    if (node.x == null || node.y == null || node.z == null) return false;
+  const v = new THREE.Vector3();
+  const out: GraphNode[] = [];
 
-    const pos = new THREE.Vector3(node.x, node.y, node.z);
-    return frustum.containsPoint(pos);
-  });
+  for (const node of nodes) {
+    if (node.x == null || node.y == null || node.z == null) continue;
+    v.set(node.x, node.y, node.z);
+    if (frustum.containsPoint(v)) out.push(node);
+  }
+  return out;
 }

@@ -1,5 +1,5 @@
 // src/hooks/useLODSystem.ts
-import { useMemo } from 'react';
+import { useMemo, useRef } from "react";
 
 /**
  * Configuration pour le système LOD (Level of Detail)
@@ -43,36 +43,34 @@ export interface LODResult {
  * @returns Objet contenant renderMode, shouldShowStarLinks, et thresholds
  */
 export function useLODSystem(config: LODConfig): LODResult {
-  // Calcul des seuils basés sur le rayon moyen
   const thresholds = useMemo(() => ({
     GALAXY_TO_STARS: config.radiusMean * 2.5,
     SHOW_STAR_LINKS: config.radiusMean * 1.2,
   }), [config.radiusMean]);
 
-  // Détermination du mode de rendu
-  const renderMode = useMemo<RenderMode>(() => {
-    return config.cameraDistance > thresholds.GALAXY_TO_STARS
-      ? 'galaxies'
-      : 'stars';
-  }, [config.cameraDistance, thresholds.GALAXY_TO_STARS]);
+  // ✅ Hystérésis mode (évite flapping galaxies/stars)
+  const modeRef = useRef<RenderMode>("galaxies");
+  const modeOn = thresholds.GALAXY_TO_STARS;
+  const modeHyst = modeOn * 0.08; // 8%
 
-  // Détermine si on affiche les liens stars (seulement si proche)
-  const shouldShowStarLinks = config.cameraDistance < thresholds.SHOW_STAR_LINKS;
+  if (modeRef.current === "stars") {
+    if (config.cameraDistance > modeOn + modeHyst) modeRef.current = "galaxies";
+  } else {
+    if (config.cameraDistance < modeOn - modeHyst) modeRef.current = "stars";
+  }
 
-  console.log('[useLODSystem]', {
-    radiusMean: config.radiusMean.toFixed(2),
-    cameraDistance: config.cameraDistance.toFixed(2),
-    renderMode,
-    shouldShowStarLinks,
-    thresholds: {
-      GALAXY_TO_STARS: thresholds.GALAXY_TO_STARS.toFixed(2),
-      SHOW_STAR_LINKS: thresholds.SHOW_STAR_LINKS.toFixed(2),
-    }
-  });
+  const renderMode = modeRef.current;
 
-  return {
-    renderMode,
-    shouldShowStarLinks,
-    thresholds
-  };
+  // ✅ Hystérésis liens
+  const linksRef = useRef(false);
+  const linkOn = thresholds.SHOW_STAR_LINKS;
+  const linkHyst = linkOn * 0.08;
+
+  if (linksRef.current) {
+    if (config.cameraDistance > linkOn + linkHyst) linksRef.current = false;
+  } else {
+    if (config.cameraDistance < linkOn - linkHyst) linksRef.current = true;
+  }
+
+  return { renderMode, shouldShowStarLinks: linksRef.current, thresholds };
 }
