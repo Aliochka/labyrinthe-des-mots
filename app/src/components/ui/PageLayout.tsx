@@ -1,8 +1,5 @@
 // src/components/ui/PageLayout.tsx
 import React, { type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
-import { useAppStore } from '../../store/appStore';
-import { Params } from './Params';
 
 export type Tab = {
   id: string;
@@ -14,21 +11,13 @@ interface PageLayoutProps {
   tabs: Tab[];
   activeTabId: string;
   setActiveTabId: (id: string) => void;
-  modeSwitchLink?: {
-    to: string;
-    label: string;
-    color: string;
-  };
 }
 
 export const PageLayout: React.FC<PageLayoutProps> = ({
   tabs,
   activeTabId,
   setActiveTabId,
-  modeSwitchLink,
 }) => {
-  const toggleSettings = useAppStore((s) => s.toggleSettings);
-
   const activeTab = tabs.find((t) => t.id === activeTabId);
 
   return (
@@ -77,57 +66,12 @@ export const PageLayout: React.FC<PageLayoutProps> = ({
           </button>
         ))}
 
-        {/* Séparateur */}
-        <div style={{ flex: 1 }} />
-
-        {/* Lien vers l'autre mode */}
-        {modeSwitchLink && (
-          <Link
-            to={modeSwitchLink.to}
-            style={{
-              padding: '6px 12px',
-              fontSize: 13,
-              border: `1px solid ${modeSwitchLink.color}40`,
-              borderRadius: 6,
-              background: 'transparent',
-              color: modeSwitchLink.color,
-              textDecoration: 'none',
-              marginRight: 8,
-              transition: 'all 0.2s',
-            }}
-          >
-            {modeSwitchLink.label}
-          </Link>
-        )}
-
-        {/* Bouton paramètres */}
-        <button
-          onClick={toggleSettings}
-          style={{
-            padding: '6px 12px',
-            fontSize: 13,
-            border: 'none',
-            borderRadius: 6,
-            background: 'transparent',
-            color: '#f5f5f5',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-          }}
-          title="Paramètres"
-        >
-          ⚙️ Paramètres
-        </button>
       </div>
 
       {/* Contenu */}
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         {activeTab?.content}
       </div>
-
-      {/* Params Panel */}
-      <Params />
     </div>
   );
 };

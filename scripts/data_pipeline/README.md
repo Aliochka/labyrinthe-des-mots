@@ -1,4 +1,12 @@
 - importer les données de wordnet -> import-raw-data.py
+
+ ```
+npx ts-node scripts/build-lemma-graph.ts \
+ --input=./data/raw/omw-fr-1.4 \
+ --output=./app/public/lemma-graph.json
+ ```
+
+
 - les transformer en graphe lemma centric -> build-lemma-graph.ts
 - trouver les cluster dans la grande composante (Leiden) -> make_clusters.py
 

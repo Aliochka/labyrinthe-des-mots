@@ -1,6 +1,4 @@
 // src/hooks/useMultiScaleGraph.ts
-import { useEffect, useState } from 'react';
-import { useAppStore } from '../store/appStore';
 import type { MultiScaleGraph } from '../types/graph';
 /**
  * DEPRECATED: This hook is replaced by useUniverseGraph.

@@ -6,7 +6,6 @@ import {
   Route,
 } from 'react-router-dom';
 import { GamePage } from './pages/GamePage';
-import { StudyPage } from './pages/StudyPage';
 
 const App: React.FC = () => {
   return (
@@ -24,7 +23,6 @@ const App: React.FC = () => {
         <Routes>
           <Route path="/" element={<GamePage />} />
           <Route path="/game" element={<GamePage />} />
-          <Route path="/study" element={<StudyPage />} />
         </Routes>
       </div>
     </BrowserRouter>

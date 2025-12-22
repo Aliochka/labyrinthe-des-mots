@@ -57,10 +57,7 @@ export function computeLocalSynsetPositions(
   // 2. Calculer le centre de masse global
   const centerOfMass = calculateCenterOfMass(globalCoords.map(item => item.pos));
 
-  // 3. Trouver le synset central
-  const centerSynset = synsets.find(s => s.isCenter) || synsets[0];
-
-  // 4. Calculer l'échelle locale
+  // 3. Calculer l'échelle locale
   const distances = globalCoords.map(item =>
     distance3D(item.pos, centerOfMass)
   );

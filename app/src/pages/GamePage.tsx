@@ -1,6 +1,5 @@
 // src/pages/GamePage.tsx
-import React, { useEffect, useState } from 'react';
-import { useAppStore } from '../store/appStore';
+import React, { useState } from 'react';
 import { Navigation } from '../components/graph/Navigation';
 import { GraphExploration } from '../components/graph/GraphExploration';
 import Map2D from '../components/graph/Map2D';
@@ -19,17 +18,6 @@ export const GamePage: React.FC = () => {
   const [currentQuery] = useState(() =>
     randomWords[Math.floor(Math.random() * randomWords.length)]
   );
-
-  const mode = useAppStore((s) => s.mode);
-  const setMode = useAppStore((s) => s.setMode);
-
-  // Assurer que le mode est bien "play" sur cette page
-  useEffect(() => {
-    if (mode !== 'play') {
-      setMode('play');
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode]);
 
   // Charger le graphe universe (seulement pour Map2D et Map3D)
   const shouldLoadGraph = activeTabId === 'map2d' || activeTabId === 'map3d';
@@ -114,11 +102,6 @@ export const GamePage: React.FC = () => {
       tabs={tabs}
       activeTabId={activeTabId}
       setActiveTabId={setActiveTabId}
-      modeSwitchLink={{
-        to: '/study',
-        label: '📚 Mode Étude',
-        color: '#ff6b6b',
-      }}
     />
   );
 };

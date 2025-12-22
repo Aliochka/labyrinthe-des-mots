@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useRef } from 'react';
 import { Vector3, InstancedMesh, Object3D, Color } from 'three';
 import { useFrame } from '@react-three/fiber';
 import type { WordNode } from '../../types/game';

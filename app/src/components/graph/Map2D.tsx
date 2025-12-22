@@ -134,10 +134,8 @@ export default function Map2D({
 }: Props) {
     const fgRef = useRef<any>(null);
 
-    // ---- MODE GLOBAL (play / study) + exploration ----
-    const mode = useAppStore((s) => s.mode);
+    // ---- Exploration tracking ----
     const exploredNodeIds = useAppStore((s) => s.exploredNodeIds);
-    const visibleNavigationNodeIds = useAppStore((s) => s.visibleNavigationNodeIds);
     const addExploredNode = useAppStore((s) => s.addExploredNode);
 
     // ================================================
@@ -152,11 +150,6 @@ export default function Map2D({
     const exploredIdSet = useMemo(
         () => new Set(exploredNodeIds.map(String)),
         [exploredNodeIds]
-    );
-
-    const visibleIdSet = useMemo(
-        () => new Set(visibleNavigationNodeIds.map(String)),
-        [visibleNavigationNodeIds]
     );
 
     // ================================================
@@ -186,95 +179,29 @@ export default function Map2D({
     const rawData: GraphData | null = useMemo(() => {
         if (!levels.length) return null;
 
-        console.log(`[Map2D/rawData] Mode=${mode}, levelIdx=${levelIdx}, level=${levels[levelIdx]?.id}, nodes=${levels[levelIdx]?.data.nodes.length}`);
+        console.log(`[Map2D/rawData] levelIdx=${levelIdx}, level=${levels[levelIdx]?.id}, nodes=${levels[levelIdx]?.data.nodes.length}`);
         return levels[levelIdx].data;
-    }, [levels, levelIdx, mode]);
+    }, [levels, levelIdx]);
 
     // ================================================
-    // 🔥 MODE PLAY / STUDY — filtrage contextuel
+    // Display data with full universe (always show all nodes)
     // ================================================
     const displayData: GraphData = useMemo(() => {
         if (!rawData || !graphData) return { nodes: [], links: [] };
 
         const rawNodes = rawData.nodes;
+        let nodes = rawNodes;
 
-        // --- MODE STUDY : on montre le niveau courant (avec downsample global) ---
-        if (mode === "study") {
-            let nodes = rawNodes;
-
-            // Downsampling global si trop de stars
-            if (currentLevelId === 'star' && nodes.length > MAX_NODES_2D) {
-                const step = Math.ceil(nodes.length / MAX_NODES_2D);
-                nodes = nodes.filter((_, i) => i % step === 0);
-                console.log(`[Map2D/study/star] Downsampled: ${rawNodes.length} → ${nodes.length}`);
-            }
-
-            const normalized = normalizeNodesForCanvas(nodes, width, height);
-            return { nodes: normalized, links: [] };
+        // Downsampling global si trop de stars
+        if (currentLevelId === 'star' && nodes.length > MAX_NODES_2D) {
+            const step = Math.ceil(nodes.length / MAX_NODES_2D);
+            nodes = nodes.filter((_, i) => i % step === 0);
+            console.log(`[Map2D/star] Downsampled: ${rawNodes.length} → ${nodes.length}`);
         }
 
-        // --- MODE PLAY : montrer les nœuds visibles de Navigation ---
-        if (!visibleNavigationNodeIds.length) {
-            return { nodes: [], links: [] };
-        }
-
-        const visibleSet = new Set(visibleNavigationNodeIds.map(String));
-
-        // NIVEAU GALAXY : filtrer les galaxies contenant des étoiles visibles
-        if (currentLevelId === "galaxy") {
-            const visibleGalaxies = rawNodes.filter(galaxy => {
-                return galaxyDataService.hasVisibleStars(galaxy.id, visibleSet);
-            });
-
-            const normalized = normalizeNodesForCanvas(visibleGalaxies, width, height);
-
-            console.log(`[Map2D/play/galaxy] ${visibleGalaxies.length} galaxies contiennent des étoiles visibles`);
-
-            return { nodes: normalized, links: [] };
-        }
-
-        // NIVEAU STAR : afficher les étoiles visibles avec cap par galaxie
-        if (currentLevelId === "star") {
-            const MAX_STARS_PER_GALAXY = 2000;
-
-            // Regrouper les stars visibles par galaxie
-            const starsByGalaxy = new Map<string, GraphNode[]>();
-
-            for (const star of rawNodes) {
-                if (!visibleSet.has(String(star.id))) continue;
-
-                const starNode = graphData.starIndex.get(star.id);
-                if (!starNode) continue;
-
-                const galaxyId = starNode.galaxy;
-                if (!starsByGalaxy.has(galaxyId)) {
-                    starsByGalaxy.set(galaxyId, []);
-                }
-                starsByGalaxy.get(galaxyId)!.push(star);
-            }
-
-            // Limiter chaque galaxie à MAX_STARS_PER_GALAXY
-            const cappedStars: GraphNode[] = [];
-            starsByGalaxy.forEach((stars, galaxyId) => {
-                if (stars.length <= MAX_STARS_PER_GALAXY) {
-                    cappedStars.push(...stars);
-                } else {
-                    const step = Math.ceil(stars.length / MAX_STARS_PER_GALAXY);
-                    const sampled = stars.filter((_, i) => i % step === 0);
-                    cappedStars.push(...sampled);
-                    console.log(`[Map2D/play/star] Galaxy ${galaxyId}: ${stars.length} → ${sampled.length} stars`);
-                }
-            });
-
-            const normalized = normalizeNodesForCanvas(cappedStars, width, height);
-
-            console.log(`[Map2D/play/star] ${cappedStars.length} étoiles affichées`);
-
-            return { nodes: normalized, links: [] };
-        }
-
-        return { nodes: [], links: [] };
-    }, [rawData, graphData, mode, visibleNavigationNodeIds, currentLevelId, width, height]);
+        const normalized = normalizeNodesForCanvas(nodes, width, height);
+        return { nodes: normalized, links: [] };
+    }, [rawData, graphData, currentLevelId, width, height]);
 
     // ================================================
     // CALCUL VORONOI (sur données finales)
@@ -497,10 +424,7 @@ export default function Map2D({
     const handleNodeClick = (node: any) => {
         const n = node as GraphNode;
         setSelectedNode(n);
-
-        if (mode === "play") {
-            addExploredNode(String(n.id));
-        }
+        addExploredNode(String(n.id));
     };
 
     // ================================================
@@ -559,7 +483,7 @@ export default function Map2D({
                         fontSize: 14,
                     }}
                 >
-                    {mode === 'play' ? 'Explorez des mots dans Navigation pour les voir ici' : 'Aucune donnée à afficher'}
+                    Aucune donnée à afficher
                 </div>
             ) : (
             <ForceGraph2D

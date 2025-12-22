@@ -6,7 +6,6 @@ import type {
   GraphNode,
   GraphLink,
   StarNode,
-  GalaxyNode,
 } from '../types/graph';
 
 const UNIVERSE_URL = '/universe.json';

@@ -1,6 +1,5 @@
 // src/store/appStore.ts
 import { create } from "zustand";
-import type { AppMode } from "../types/mode";
 import type { GraphLink } from "../types/graph";
 import { getDefaultEnabledRelations } from "../constants/relationTypes";
 
@@ -10,11 +9,6 @@ const linkKey = (l: GraphLink) => `${l.source}-${l.target}`;
 const STORE_VERSION = 2;
 
 interface AppState {
-    // --- mode global ---
-    mode: AppMode;
-    setMode: (mode: AppMode) => void;
-    toggleMode: () => void;
-
     // --- exploration de mots ---
     exploredNodeIds: string[];
     exploredLinkKeys: string[];
@@ -45,14 +39,6 @@ interface AppState {
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
-    mode: "study",
-
-    setMode: (mode) => set({ mode }),
-    toggleMode: () =>
-        set((state) => ({
-            mode: state.mode === "play" ? "study" : "play",
-        })),
-
     exploredNodeIds: [],
     exploredLinkKeys: [],
 

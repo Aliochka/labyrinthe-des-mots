@@ -50,10 +50,6 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
   initialQuery = 'vie',
   onLemmaClick
 }) => {
-  // Lecture du mode et des mots découverts depuis le store
-  const mode = useAppStore((s) => s.mode);
-  const visibleNavigationNodeIds = useAppStore((s) => s.visibleNavigationNodeIds);
-
   // Filtrage des relations
   const enabledRelationTypes = useAppStore((s) => s.enabledRelationTypes);
   const toggleRelationType = useAppStore((s) => s.toggleRelationType);
@@ -67,13 +63,8 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
   const forceGraphRef = useRef<any>(null);
   const hasInitialCameraRef = useRef(false);
 
-  console.log('[GraphExploration] Mode:', mode, 'Mots découverts:', visibleNavigationNodeIds.length);
-
-  // Keyboard handler: expand from selected lemma on Space (study mode only)
+  // Keyboard handler: expand from selected lemma on Space
   useEffect(() => {
-    // Disable manual expansion in play mode
-    if (mode === 'play') return;
-
     const handleKeyPress = (event: KeyboardEvent) => {
       if (event.key === ' ' && selectedNodeId) {
         event.preventDefault();
@@ -83,7 +74,7 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
 
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [selectedNodeId, mode]);
+  }, [selectedNodeId]);
 
   const expandFromLemma = (lemmaName: string) => {
     console.log('Expansion depuis le lemme :', lemmaName);
@@ -174,11 +165,11 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
     }
   }, []);
 
-  // Initial graph loading - adaptatif selon le mode
+  // Initial graph loading with full BFS expansion
   useEffect(() => {
     const loadData = async () => {
       try {
-        console.log('[GraphExploration] Initialisation en mode:', mode);
+        console.log('[GraphExploration] Initialisation avec expansion BFS complète');
 
         await lemmaDataService.initialize();
 
@@ -197,82 +188,43 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
         const nodes: GraphNode[] = [];
         const links: GraphLink[] = [];
 
-        // Mode Study: BFS expansion complète
-        if (mode === 'study') {
-          console.log('[GraphExploration] Mode STUDY: expansion BFS');
+        // Add center node
+        nodes.push(createGraphNode(centerLemma, true));
 
-          // Add center node
-          nodes.push(createGraphNode(centerLemma, true));
+        // Expand via BFS (150 nodes, depth 2)
+        const expansion = lemmaDataService.expandLemma(centerLemma.lemma, 150, 2);
 
-          // Expand via BFS
-          const expansion = lemmaDataService.expandLemma(centerLemma.lemma, 150, 2);
-
-          if (expansion) {
-            // Add neighbors
-            expansion.neighbors.forEach(neighbor => {
-              if (!nodes.find(n => n.id === neighbor.lemma)) {
-                nodes.push(createGraphNode(neighbor, false));
-              }
-            });
-
-            // Add missing nodes from relations
-            expansion.relations.forEach(rel => {
-              if (!nodes.find(n => n.id === rel.source)) {
-                const node = lemmaDataService.getLemmaByName(rel.source);
-                if (node) nodes.push(createGraphNode(node, false));
-              }
-              if (!nodes.find(n => n.id === rel.target)) {
-                const node = lemmaDataService.getLemmaByName(rel.target);
-                if (node) nodes.push(createGraphNode(node, false));
-              }
-            });
-
-            // Filter and add relations
-            const filteredRelations = filterLemmaEdges(expansion.relations, enabledRelationTypes);
-            filteredRelations.forEach(rel => {
-              if (!links.find(l => l.source === rel.source && l.target === rel.target)) {
-                links.push({
-                  source: rel.source,
-                  target: rel.target,
-                  weight: rel.weight
-                });
-              }
-            });
-          }
-        }
-        // Mode Play: seulement le mot initial au départ
-        else {
-          console.log('[GraphExploration] Mode PLAY: mot initial seulement');
-          nodes.push(createGraphNode(centerLemma, true));
-
-          // Charger les liens si des mots ont déjà été découverts
-          if (visibleNavigationNodeIds.length > 0) {
-            console.log('[GraphExploration] Chargement des mots déjà découverts:', visibleNavigationNodeIds.length);
-
-            for (const nodeId of visibleNavigationNodeIds) {
-              const lemma = lemmaDataService.getLemmaByName(nodeId);
-              if (lemma && !nodes.find(n => n.id === nodeId)) {
-                nodes.push(createGraphNode(lemma, false));
-              }
+        if (expansion) {
+          // Add neighbors
+          expansion.neighbors.forEach(neighbor => {
+            if (!nodes.find(n => n.id === neighbor.lemma)) {
+              nodes.push(createGraphNode(neighbor, false));
             }
+          });
 
-            // Charger les liens entre les nœuds découverts
-            const nodeIdSet = new Set(nodes.map(n => n.id));
-            for (const nodeId of nodeIdSet) {
-              const edges = lemmaDataService.getLemmaEdges(nodeId);
-              const filteredEdges = filterLemmaEdges(edges, enabledRelationTypes);
-              filteredEdges.forEach(edge => {
-                const targetInGraph = nodeIdSet.has(edge.target);
-                if (targetInGraph && !links.find(l => l.source === edge.source && l.target === edge.target)) {
-                  links.push({
-                    source: edge.source,
-                    target: edge.target,
-                    weight: edge.weight
-                  });
-                }
+          // Add missing nodes from relations
+          expansion.relations.forEach(rel => {
+            if (!nodes.find(n => n.id === rel.source)) {
+              const node = lemmaDataService.getLemmaByName(rel.source);
+              if (node) nodes.push(createGraphNode(node, false));
+            }
+            if (!nodes.find(n => n.id === rel.target)) {
+              const node = lemmaDataService.getLemmaByName(rel.target);
+              if (node) nodes.push(createGraphNode(node, false));
+            }
+          });
+
+          // Filter and add relations
+          const filteredRelations = filterLemmaEdges(expansion.relations, enabledRelationTypes);
+          filteredRelations.forEach(rel => {
+            if (!links.find(l => l.source === rel.source && l.target === rel.target)) {
+              links.push({
+                source: rel.source,
+                target: rel.target,
+                weight: rel.weight
               });
             }
-          }
+          });
         }
 
         console.log(`[GraphExploration] Graphe créé: ${nodes.length} nœuds, ${links.length} liens`);
@@ -288,53 +240,7 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
 
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, initialQuery, enabledRelationTypes]);
-
-  // Dynamic update when new words are discovered in Navigation (play mode only)
-  useEffect(() => {
-    if (mode !== 'play') return;
-    if (visibleNavigationNodeIds.length === 0) return;
-
-    console.log('[GraphExploration] Mise à jour dynamique:', visibleNavigationNodeIds.length, 'mots découverts');
-
-    setGraphData(prevData => {
-      const currentNodeIds = new Set(prevData.nodes.map(n => n.id));
-      const newNodes = [...prevData.nodes];
-      const newLinks = [...prevData.links];
-
-      // Add newly discovered nodes
-      for (const nodeId of visibleNavigationNodeIds) {
-        if (!currentNodeIds.has(nodeId)) {
-          const lemma = lemmaDataService.getLemmaByName(nodeId);
-          if (lemma) {
-            newNodes.push(createGraphNode(lemma, false));
-            currentNodeIds.add(nodeId);
-          }
-        }
-      }
-
-      // Add filtered links between visible nodes
-      for (const nodeId of currentNodeIds) {
-        const edges = lemmaDataService.getLemmaEdges(nodeId);
-        const filteredEdges = filterLemmaEdges(edges, enabledRelationTypes);
-        filteredEdges.forEach(edge => {
-          const targetInGraph = currentNodeIds.has(edge.target);
-          const linkExists = newLinks.find(l => l.source === edge.source && l.target === edge.target);
-          if (targetInGraph && !linkExists) {
-            newLinks.push({
-              source: edge.source,
-              target: edge.target,
-              weight: edge.weight
-            });
-          }
-        });
-      }
-
-      console.log(`[GraphExploration] Graphe mis à jour: ${newNodes.length} nœuds (+${newNodes.length - prevData.nodes.length}), ${newLinks.length} liens (+${newLinks.length - prevData.links.length})`);
-
-      return { nodes: newNodes, links: newLinks };
-    });
-  }, [mode, visibleNavigationNodeIds, enabledRelationTypes]);
+  }, [initialQuery, enabledRelationTypes]);
 
   // Helper functions
   const createGraphNode = (lemma: LemmaNode, isCenter: boolean): GraphNode => {
@@ -439,35 +345,17 @@ export const GraphExploration: React.FC<GraphExplorationProps> = ({
         controls={[
           { keys: 'Clic', description: 'Sélectionner' },
           { keys: 'Glisser', description: 'Pivoter' },
-          mode === 'study'
-            ? { keys: 'ESPACE', description: 'Étendre' }
-            : { keys: 'Navigation', description: 'Découvrir' }
+          { keys: 'ESPACE', description: 'Étendre' }
         ]}
       >
-        {/* Mode stats */}
+        {/* Graph stats */}
         <div style={{ marginTop: '12px', color: '#f5f5f5', fontSize: '12px' }}>
-          {mode === 'play' ? (
-            <>
-              <div style={{ color: '#4ecdc4', fontWeight: 'bold' }}>MODE: PLAY</div>
-              <div>Découverts: {graphData.nodes.length} mots</div>
-              <div>Liens: {graphData.links.length}</div>
-              {graphData.nodes.length === 1 && (
-                <div style={{ marginTop: 4, color: '#ffaa00' }}>
-                  → Naviguez pour découvrir des mots !
-                </div>
-              )}
-            </>
-          ) : (
-            <>
-              <div style={{ color: '#ff6b6b', fontWeight: 'bold' }}>MODE: STUDY</div>
-              <div>Exploration: {graphData.nodes.length} nœuds</div>
-              <div>Liens: {graphData.links.length}</div>
-              {selectedNodeId && (
-                <div style={{ marginTop: 4, color: '#ffaa00' }}>
-                  → Appuyez sur ESPACE pour étendre
-                </div>
-              )}
-            </>
+          <div>Exploration: {graphData.nodes.length} nœuds</div>
+          <div>Liens: {graphData.links.length}</div>
+          {selectedNodeId && (
+            <div style={{ marginTop: 4, color: '#ffaa00' }}>
+              → Appuyez sur ESPACE pour étendre
+            </div>
           )}
         </div>
 

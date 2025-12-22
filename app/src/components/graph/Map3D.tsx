@@ -43,10 +43,8 @@ export default function Map3D({
   const fgRef = useRef<any>(null);
 
   // ================================================
-  // MODE GLOBAL (play / study) + exploration
+  // Exploration tracking and path visualization
   // ================================================
-  const mode = useAppStore((s) => s.mode);
-  const exploredNodeIds = useAppStore((s) => s.exploredNodeIds);
   const visibleNavigationNodeIds = useAppStore((s) => s.visibleNavigationNodeIds);
   const addExploredNode = useAppStore((s) => s.addExploredNode);
 
@@ -78,7 +76,6 @@ export default function Map3D({
   }, [graphData]);
 
   const [levelIdx, setLevelIdx] = useState(0);
-  const [zoomK, setZoomK] = useState(1); // pure info visuelle
   const [linksOnly, setLinksOnly] = useState(false);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
 
@@ -93,129 +90,105 @@ export default function Map3D({
   }, [levels, levelIdx]);
 
   // ================================================
-  // 🔥 MODE PLAY / STUDY — filtrage + downsample contextuel
+  // Display data with full universe (always show all nodes)
   // ================================================
   const displayData: GraphData = useMemo(() => {
     if (!rawData || !graphData) return { nodes: [], links: [] };
 
     const rawNodes = rawData.nodes;
     const rawLinks = rawData.links || [];
+    let nodes = rawNodes;
 
-    // --- MODE STUDY : on montre tout le niveau courant (avec downsample global) ---
-    if (mode === "study") {
-      let nodes = rawNodes;
-
-      // Downsampling global si trop de stars
-      if (currentLevelId === 'star' && nodes.length > MAX_NODES_2D) {
-        const step = Math.ceil(nodes.length / MAX_NODES_2D);
-        nodes = nodes.filter((_, i) => i % step === 0);
-        console.log(`[Map3D/study/star] Downsampled: ${rawNodes.length} → ${nodes.length}`);
-      }
-
-      // Filtrer les liens pour ne garder que ceux entre nœuds visibles
-      const nodeIdSet = new Set(nodes.map(n => String(n.id)));
-      let filteredLinks = rawLinks.filter(link =>
-        nodeIdSet.has(String(link.source)) && nodeIdSet.has(String(link.target))
-      );
-
-      // Appliquer le filtrage par type de relation (niveau star uniquement)
-      if (currentLevelId === 'star') {
-        filteredLinks = filterGraphLinks(filteredLinks, enabledRelationTypes);
-      }
-
-      return { nodes, links: filteredLinks };
+    // Downsampling global si trop de stars
+    if (currentLevelId === 'star' && nodes.length > MAX_NODES_2D) {
+      const step = Math.ceil(nodes.length / MAX_NODES_2D);
+      nodes = nodes.filter((_, i) => i % step === 0);
+      console.log(`[Map3D/star] Downsampled: ${rawNodes.length} → ${nodes.length}`);
     }
 
-    // --- MODE PLAY : montrer les nœuds visibles de Navigation ---
-    if (!visibleNavigationNodeIds.length) {
-      return { nodes: [], links: [] };
-    }
+    // Filtrer les liens pour ne garder que ceux entre nœuds visibles
+    const nodeIdSet = new Set(nodes.map(n => String(n.id)));
+    let filteredLinks = rawLinks.filter(link =>
+      nodeIdSet.has(String(link.source)) && nodeIdSet.has(String(link.target))
+    );
 
-    const visibleSet = new Set(visibleNavigationNodeIds.map(String));
-
-    // NIVEAU GALAXY : filtrer les galaxies contenant des étoiles visibles
-    if (currentLevelId === "galaxy") {
-      const visibleGalaxies = rawNodes.filter(galaxy => {
-        return galaxyDataService.hasVisibleStars(galaxy.id, visibleSet);
-      });
-
-      // Filtrer les liens entre galaxies visibles
-      const galaxyIdSet = new Set(visibleGalaxies.map(g => String(g.id)));
-      const filteredLinks = rawLinks.filter(link =>
-        galaxyIdSet.has(String(link.source)) && galaxyIdSet.has(String(link.target))
-      );
-
-      console.log(`[Map3D/play/galaxy] ${visibleGalaxies.length} galaxies contiennent des étoiles visibles`);
-
-      return { nodes: visibleGalaxies, links: filteredLinks };
-    }
-
-    // NIVEAU STAR : afficher les étoiles visibles avec cap par galaxie
-    if (currentLevelId === "star") {
-      const MAX_STARS_PER_GALAXY = 2000;
-
-      // Regrouper les stars visibles par galaxie
-      const starsByGalaxy = new Map<string, GraphNode[]>();
-
-      for (const star of rawNodes) {
-        if (!visibleSet.has(String(star.id))) continue;
-
-        const starNode = graphData.starIndex.get(star.id);
-        if (!starNode) continue;
-
-        const galaxyId = starNode.galaxy;
-        if (!starsByGalaxy.has(galaxyId)) {
-          starsByGalaxy.set(galaxyId, []);
-        }
-        starsByGalaxy.get(galaxyId)!.push(star);
-      }
-
-      // Limiter chaque galaxie à MAX_STARS_PER_GALAXY (downsampling par galaxie)
-      const cappedStars: GraphNode[] = [];
-      starsByGalaxy.forEach((stars, galaxyId) => {
-        if (stars.length <= MAX_STARS_PER_GALAXY) {
-          cappedStars.push(...stars);
-        } else {
-          const step = Math.ceil(stars.length / MAX_STARS_PER_GALAXY);
-          const sampled = stars.filter((_, i) => i % step === 0);
-          cappedStars.push(...sampled);
-          console.log(`[Map3D/play/star] Galaxy ${galaxyId}: ${stars.length} → ${sampled.length} stars`);
-        }
-      });
-
-      // Filtrer les liens + relation types
-      const nodeIdSet = new Set(cappedStars.map(n => String(n.id)));
-      let filteredLinks = rawLinks.filter(link =>
-        nodeIdSet.has(String(link.source)) && nodeIdSet.has(String(link.target))
-      );
+    // Appliquer le filtrage par type de relation (niveau star uniquement)
+    if (currentLevelId === 'star') {
       filteredLinks = filterGraphLinks(filteredLinks, enabledRelationTypes);
-
-      console.log(`[Map3D/play/star] ${cappedStars.length} étoiles affichées, ${filteredLinks.length} liens`);
-
-      return { nodes: cappedStars, links: filteredLinks };
     }
 
-    return { nodes: [], links: [] };
-  }, [rawData, graphData, mode, visibleNavigationNodeIds, currentLevelId, enabledRelationTypes]);
-
+    return { nodes, links: filteredLinks };
+  }, [rawData, graphData, currentLevelId, enabledRelationTypes]);
 
   // ================================================
-  // LECTURE DU "ZOOM" À PARTIR DE LA CAMÉRA (info)
+  // PATH VISUALIZATION - Discovery trail
   // ================================================
   useEffect(() => {
-    const id = window.setInterval(() => {
-      const fg = fgRef.current;
-      if (!fg) return;
+    const fg = fgRef.current;
+    if (!fg) return;
 
-      const cam: THREE.PerspectiveCamera = fg.camera();
-      const dist = cam.position.length() || 1;
-      const k = 1000 / dist;
+    const scene: THREE.Scene = fg.scene();
 
-      setZoomK((prev) => (Math.abs(prev - k) > 0.02 ? k : prev));
-    }, 300);
+    // Remove old path if exists
+    const oldPath = scene.getObjectByName('discovery-path');
+    if (oldPath) {
+      scene.remove(oldPath);
+      if (oldPath instanceof THREE.Mesh) {
+        oldPath.geometry.dispose();
+        if (Array.isArray(oldPath.material)) {
+          oldPath.material.forEach(m => m.dispose());
+        } else {
+          oldPath.material.dispose();
+        }
+      }
+    }
 
-    return () => window.clearInterval(id);
-  }, []);
+    // Show path only if at least 2 words discovered
+    if (visibleNavigationNodeIds.length < 2) return;
+
+    // Get positions from displayData
+    const pathPoints: THREE.Vector3[] = [];
+
+    for (const nodeId of visibleNavigationNodeIds) {
+      const node = displayData.nodes.find(n => String(n.id) === String(nodeId));
+      if (node && node.x != null && node.y != null && node.z != null) {
+        pathPoints.push(new THREE.Vector3(node.x, node.y, node.z));
+      }
+    }
+
+    if (pathPoints.length < 2) return;
+
+    // Create smooth path with CatmullRomCurve3
+    const curve = new THREE.CatmullRomCurve3(pathPoints);
+    const tubeGeometry = new THREE.TubeGeometry(
+      curve,
+      pathPoints.length * 5, // segments
+      0.3,  // radius
+      8,    // radial segments
+      false // closed
+    );
+
+    // Cyan semi-transparent material
+    const material = new THREE.MeshBasicMaterial({
+      color: 0x00ffff, // Cyan
+      transparent: true,
+      opacity: 0.6,
+    });
+
+    const pathMesh = new THREE.Mesh(tubeGeometry, material);
+    pathMesh.name = 'discovery-path';
+
+    scene.add(pathMesh);
+
+    console.log(`[Map3D] Path trail rendered with ${pathPoints.length} points`);
+
+    // Cleanup
+    return () => {
+      scene.remove(pathMesh);
+      tubeGeometry.dispose();
+      material.dispose();
+    };
+  }, [visibleNavigationNodeIds, displayData]);
 
   // ================================================
   // FADE-IN DOUX AU DÉMARRAGE
@@ -245,11 +218,8 @@ export default function Map3D({
     const fg = fgRef.current;
     if (!fg) return;
 
-    // 🆕 En mode Play : utiliser rawData pour bounding box et caméra
-    // En mode Study : utiliser displayData (comportement actuel)
-    const nodesForBoundingBox = mode === "play" && rawData
-      ? rawData.nodes
-      : displayData.nodes;
+    // Always use displayData for bounding box and camera
+    const nodesForBoundingBox = displayData.nodes;
 
     if (!nodesForBoundingBox.length) return;
 
@@ -329,7 +299,7 @@ export default function Map3D({
     return () => {
       scene.remove(helper);
     };
-  }, [displayData, currentLevelId, mode, rawData]);
+  }, [displayData, currentLevelId, rawData]);
 
   // ================================================
   // STYLE DES NOEUDS (étoiles / galaxies)
@@ -503,7 +473,7 @@ export default function Map3D({
             fontSize: 14,
           }}
         >
-          {mode === 'play' ? 'Explorez des mots dans Navigation pour les voir ici' : 'Aucune donnée à afficher'}
+          Aucune donnée à afficher
         </div>
       ) : (
         <ForceGraph3D
@@ -523,11 +493,7 @@ export default function Map3D({
           onNodeClick={(node) => {
             const n = node as GraphNode;
             setSelectedNode(n);
-
-            // 🔥 Mode Play → on enregistre l'exploration
-            if (mode === "play") {
-              addExploredNode(String(n.id));
-            }
+            addExploredNode(String(n.id));
           }}
           // 🎯 Nœuds visibles uniquement si !linksOnly
           nodeOpacity={linksOnly ? 0 : 1}
