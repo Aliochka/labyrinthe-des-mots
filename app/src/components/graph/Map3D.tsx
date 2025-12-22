@@ -14,6 +14,8 @@ import { ControlPanel } from "../ui/ControlPanel";
 import { RelationFilter } from "../ui/RelationFilter";
 import { useAppStore } from "../../store/appStore"; // <<< 🔥 MODE GLOBAL
 import { filterGraphLinks } from "../../utils/linkFilters";
+import { frustumCullNodes } from "../../utils/frustumCulling";
+import { useLODSystem } from "../../hooks/useLODSystem";
 import type {
   UniverseGraphData,
   GraphData,
@@ -31,7 +33,7 @@ interface Props {
 }
 
 // Limite dure pour ne pas tuer le GPU
-const MAX_NODES_2D = 15000;
+const MAX_NODES_2D = 20000;
 
 
 export default function Map3D({
@@ -78,8 +80,19 @@ export default function Map3D({
   const [levelIdx, setLevelIdx] = useState(0);
   const [linksOnly, setLinksOnly] = useState(false);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
+  const [center, setCenter] = useState<THREE.Vector3>(new THREE.Vector3(0, 0, 0));
+  const [cameraDistance, setCameraDistance] = useState(Infinity);
+  const [radiusMean, setRadiusMean] = useState(1);
 
   const currentLevelId: LevelId | undefined = levels[levelIdx]?.id;
+
+  // ================================================
+  // LOD SYSTEM (Level of Detail)
+  // ================================================
+  const { renderMode, shouldShowStarLinks } = useLODSystem({
+    radiusMean,
+    cameraDistance
+  });
 
   // ================================================
   // DATA NIVEAU COURANT (avant filtrage)
@@ -112,13 +125,48 @@ export default function Map3D({
       nodeIdSet.has(String(link.source)) && nodeIdSet.has(String(link.target))
     );
 
-    // Appliquer le filtrage par type de relation (niveau star uniquement)
+    // Appliquer le filtrage par type de relation et distance (niveau star uniquement)
     if (currentLevelId === 'star') {
-      filteredLinks = filterGraphLinks(filteredLinks, enabledRelationTypes);
+      if (shouldShowStarLinks) {
+        // Proche : afficher liens filtrés par type
+        filteredLinks = filterGraphLinks(filteredLinks, enabledRelationTypes);
+
+        // Downsampling liens si trop nombreux (> 10,000)
+        if (filteredLinks.length > 10000) {
+          const step = Math.ceil(filteredLinks.length / 10000);
+          filteredLinks = filteredLinks.filter((_, i) => i % step === 0);
+          console.log(`[Map3D/star] Links downsampled: ${filteredLinks.length * step} → ${filteredLinks.length}`);
+        }
+      } else {
+        // Trop loin : aucun lien star
+        filteredLinks = [];
+        console.log('[Map3D/star] Liens masqués (caméra trop loin)');
+      }
     }
 
     return { nodes, links: filteredLinks };
-  }, [rawData, graphData, currentLevelId, enabledRelationTypes]);
+  }, [rawData, graphData, currentLevelId, enabledRelationTypes, shouldShowStarLinks]);
+
+  // ================================================
+  // FRUSTUM CULLING POUR STARS
+  // ================================================
+  const culledStarNodes = useMemo(() => {
+    // Ne pas culler si mode galaxies ou pas sur niveau star
+    if (renderMode === 'galaxies' || currentLevelId !== 'star') {
+      return [];
+    }
+
+    const fg = fgRef.current;
+    if (!fg) return displayData.nodes;
+
+    // Appliquer frustum culling
+    const camera = fg.camera();
+    if (!camera) return displayData.nodes;
+
+    const culled = frustumCullNodes(displayData.nodes, camera);
+    console.log(`[Map3D] Frustum culling: ${displayData.nodes.length} → ${culled.length} nodes visibles`);
+    return culled;
+  }, [renderMode, currentLevelId, displayData, cameraDistance]);
 
   // ================================================
   // PATH VISUALIZATION - Discovery trail
@@ -260,6 +308,7 @@ export default function Map3D({
       sumY / nodeCount,
       sumZ / nodeCount
     );
+    setCenter(center);
 
     let distSum = 0;
     nodesForBoundingBox.forEach((n) => {
@@ -271,8 +320,11 @@ export default function Map3D({
       const dz = z - center.z;
       distSum += Math.sqrt(dx * dx + dy * dy + dz * dz);
     });
-    let radiusMean = distSum / nodeCount;
-    if (!isFinite(radiusMean) || radiusMean <= 0) radiusMean = 1;
+    let radiusMeanCalculated = distSum / nodeCount;
+    if (!isFinite(radiusMeanCalculated) || radiusMeanCalculated <= 0) {
+      radiusMeanCalculated = 1;
+    }
+    setRadiusMean(radiusMeanCalculated);
 
     const box = new THREE.Box3(
       new THREE.Vector3(minX, minY, minZ),
@@ -286,7 +338,7 @@ export default function Map3D({
         currentLevelId === "star" ? 3.5 :
           2.8;
 
-    const dist = radiusMean * levelDistanceFactor;
+    const dist = radiusMeanCalculated * levelDistanceFactor;
 
     const camPos = new THREE.Vector3(
       center.x + dist,
@@ -300,6 +352,170 @@ export default function Map3D({
       scene.remove(helper);
     };
   }, [displayData, currentLevelId, rawData]);
+
+  // ================================================
+  // TRACKING DISTANCE CAMÉRA (pour LOD)
+  // ================================================
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg) return;
+
+    const updateDistance = () => {
+      const camera = fg.camera();
+      if (camera && center) {
+        const distance = camera.position.distanceTo(center);
+        setCameraDistance(distance);
+      }
+    };
+
+    // Update tous les 200ms (throttle pour performance)
+    const interval = setInterval(updateDistance, 200);
+
+    // Initial update
+    updateDistance();
+
+    return () => clearInterval(interval);
+  }, [center]);
+
+  // ================================================
+  // INSTANCED MESH POUR STARS (Performance)
+  // ================================================
+  useEffect(() => {
+    const fg = fgRef.current;
+
+    // Cleanup si mode galaxies ou pas de ForceGraph
+    if (!fg || renderMode === 'galaxies' || currentLevelId !== 'star') {
+      const scene = fg?.scene();
+      const oldMesh = scene?.getObjectByName('instanced-stars');
+      if (oldMesh) {
+        scene.remove(oldMesh);
+        if (oldMesh instanceof THREE.InstancedMesh) {
+          oldMesh.geometry.dispose();
+          (oldMesh.material as THREE.Material).dispose();
+        }
+      }
+      return;
+    }
+
+    const scene: THREE.Scene = fg.scene();
+    const camera = fg.camera();
+
+    // Remove old mesh si existe
+    const oldMesh = scene.getObjectByName('instanced-stars');
+    if (oldMesh) {
+      scene.remove(oldMesh);
+      if (oldMesh instanceof THREE.InstancedMesh) {
+        oldMesh.geometry.dispose();
+        (oldMesh.material as THREE.Material).dispose();
+      }
+    }
+
+    // Si aucun nœud à afficher, skip
+    if (culledStarNodes.length === 0) {
+      console.log('[Map3D] Pas de stars à afficher (culledStarNodes vide)');
+      return;
+    }
+
+    // Create shared geometry & material (UNE SEULE FOIS pour toutes les instances)
+    const geometry = new THREE.SphereGeometry(1, 10, 10); // radius=1, scale via matrix
+    const material = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      transparent: true
+    });
+
+    const mesh = new THREE.InstancedMesh(
+      geometry,
+      material,
+      culledStarNodes.length
+    );
+    mesh.name = 'instanced-stars';
+    mesh.frustumCulled = true; // Three.js frustum culling automatique
+
+    // Update matrices & colors pour chaque instance
+    const tempObject = new THREE.Object3D();
+    const tempColor = new THREE.Color();
+
+    culledStarNodes.forEach((node, i) => {
+      const isSelected = selectedNode?.id === node.id;
+
+      // Calcul taille/couleur (MÊME LOGIQUE que nodeThreeObject actuel)
+      const d = (node as any).density ?? 0;
+      const deg = (node as any).degree ?? 0;
+      const intensityFromDeg = Math.min(1, Math.log10(deg + 2) / 2);
+      const density = d > 0 ? d : intensityFromDeg;
+
+      const levelScale = 1.6; // star level
+      const baseR = 0.7 * levelScale;
+      const intensity = 0.35 + 0.65 * density;
+
+      const radius = isSelected
+        ? (baseR + intensity * 1.1) * 1.8
+        : (baseR + intensity * 1.1);
+
+      // Position + Scale
+      tempObject.position.set(node.x ?? 0, node.y ?? 0, node.z ?? 0);
+      tempObject.scale.setScalar(radius);
+      tempObject.updateMatrix();
+      mesh.setMatrixAt(i, tempObject.matrix);
+
+      // Couleur
+      if (isSelected) {
+        tempColor.set(0x4ecdc4);
+      } else {
+        tempColor.setHSL(
+          0.78 - 0.30 * intensity,
+          1,
+          0.45 + 0.30 * intensity
+        );
+      }
+
+      const opacity = isSelected ? 1.0 : 0.55 + 0.45 * intensity;
+      tempColor.multiplyScalar(opacity);
+      mesh.setColorAt(i, tempColor);
+    });
+
+    // Mark pour GPU upload
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) {
+      mesh.instanceColor.needsUpdate = true;
+    }
+
+    scene.add(mesh);
+
+    console.log(`[Map3D] InstancedMesh créé: ${culledStarNodes.length} instances`);
+
+    // Raycasting pour click
+    const raycaster = new THREE.Raycaster();
+    const handleClick = (event: MouseEvent) => {
+      const mouse = new THREE.Vector2(
+        (event.clientX / window.innerWidth) * 2 - 1,
+        -(event.clientY / window.innerHeight) * 2 + 1
+      );
+
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObject(mesh);
+
+      if (intersects.length > 0 && intersects[0].instanceId != null) {
+        const instanceId = intersects[0].instanceId;
+        const node = culledStarNodes[instanceId];
+        if (node) {
+          setSelectedNode(node as GraphNode);
+          addExploredNode(String(node.id));
+          console.log(`[Map3D] Star sélectionnée:`, node.id);
+        }
+      }
+    };
+
+    window.addEventListener('click', handleClick);
+
+    // Cleanup
+    return () => {
+      scene.remove(mesh);
+      geometry.dispose();
+      material.dispose();
+      window.removeEventListener('click', handleClick);
+    };
+  }, [culledStarNodes, selectedNode, renderMode, currentLevelId, addExploredNode]);
 
   // ================================================
   // STYLE DES NOEUDS (étoiles / galaxies)
@@ -498,8 +714,25 @@ export default function Map3D({
           // 🎯 Nœuds visibles uniquement si !linksOnly
           nodeOpacity={linksOnly ? 0 : 1}
           nodeThreeObject={
-            linksOnly ? (() => null) as any : (nodeThreeObject as any)
+            linksOnly
+              ? (() => null) as any
+              : ((node: any) => {
+                  // Stars: null (rendu par InstancedMesh)
+                  if (currentLevelId === 'star' && renderMode === 'stars') {
+                    return null;
+                  }
+                  // Galaxies: render normalement
+                  return nodeThreeObject(node);
+                }) as any
           }
+          // 🎯 Labels : désactiver pour stars (économie mémoire)
+          nodeLabel={(node: any) => {
+            const n = node as GraphNode;
+            if (currentLevelId === 'star' && renderMode === 'stars') {
+              return ''; // Pas de label pour stars
+            }
+            return n.name ?? String(n.id); // Labels pour galaxies
+          }}
           // 🎯 Liens : style spécial en mode "liens seuls"
           linkWidth={linkWidth as any}
           linkOpacity={linksOnly ? 0.5 : 0.18}
