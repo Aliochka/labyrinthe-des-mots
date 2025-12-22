@@ -1,0 +1,15 @@
+# Requirements pour le pipeline de données - Labyrinthe des Mots
+# Installation: pip install -r requirements.txt
+
+# Traitement de données
+pandas>=2.0.0
+
+# Traitement du langage naturel
+nltk>=3.8.0
+
+# Analyse de graphes
+python-igraph>=0.11.0
+leidenalg>=0.10.0
+
+# Requêtes HTTP (Wikidata)
+requests>=2.31.0
