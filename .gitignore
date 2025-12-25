@@ -20,6 +20,7 @@ atlas-*.json
 lemma-atlas-*.json
 multiscale-*.json
 lemma-*.json
+app/public/universe.json
 
 # Build outputs
 dist/
@@ -67,3 +68,5 @@ pip-delete-this-directory.txt
 .coverage
 *.egg-info/
 dist-python/
+
+

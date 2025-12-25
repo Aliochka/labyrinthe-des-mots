@@ -50,6 +50,18 @@ function linkEndId(v: any) {
   return idStr(v);
 }
 
+function linkIdStable(link: any) {
+  // source/target peuvent être ids ou objets (ForceGraph)
+  const s = linkEndId(link.source);
+  const t = linkEndId(link.target);
+  const type = idStr(link.relType ?? link.type ?? "");
+  // on canonicalise pour éviter s-t vs t-s si tu veux un id “undirected”
+  const a = s < t ? s : t;
+  const b = s < t ? t : s;
+  return `${a}__${b}__${type}`;
+}
+
+
 
 function hashString(s: string) {
   let h = 2166136261;
@@ -151,6 +163,23 @@ export default function Map3D({
   const [center, setCenter] = useState(new THREE.Vector3(0, 0, 0));
   const [cameraDistance, setCameraDistance] = useState(Infinity);
   const [radiusMean, setRadiusMean] = useState(1);
+  type Agent = {
+    nodeId: string;
+    recent: string[]; // petite mémoire anti ping-pong
+  };
+
+  const [agentLinks, setAgentLinks] = useState(true);
+  const [agentCount, setAgentCount] = useState(12);
+  const [agentBudget, setAgentBudget] = useState(2); // nb d’activations par tick / agent
+  const [agentTtlMs, setAgentTtlMs] = useState(2500);
+  const [agentStepMs, setAgentStepMs] = useState(50);
+
+  const neighborsRef = useRef<Map<string, Array<{ to: string; linkId: string }>>>(new Map());
+  const degreeRef = useRef<Map<string, number>>(new Map());
+
+  const agentsRef = useRef<Agent[]>([]);
+  const activeLinksRef = useRef<Set<string>>(new Set());
+  const activeExpiryRef = useRef<Map<string, number>>(new Map());
 
   const currentLevelId: LevelId | undefined = levels[levelIdx]?.id;
 
@@ -220,6 +249,7 @@ export default function Map3D({
     });
 
 
+
     if (currentLevelId === "star") {
       const forceLinks = linksOnly; // ✅ override utilisateur
       if (shouldShowStarLinks || forceLinks) {
@@ -233,6 +263,11 @@ export default function Map3D({
         filteredLinks = [];
       }
     }
+    // --- ensure stable id on links (required for agent visibility) ---
+    filteredLinks = filteredLinks.map((l: any) => {
+      if (!l.id) l.id = linkIdStable(l);
+      return l;
+    });
 
     return { nodes, links: filteredLinks };
   }, [
@@ -502,6 +537,37 @@ export default function Map3D({
     };
   }, []);
 
+  useEffect(() => {
+    const map = new Map<string, Array<{ to: string; linkId: string }>>();
+    const deg = new Map<string, number>();
+
+    for (const l of (displayData.links ?? []) as any[]) {
+      const s = linkEndId(l.source);
+      const t = linkEndId(l.target);
+      const id = idStr(l.id ?? linkIdStable(l));
+
+      if (!s || !t) continue;
+
+      if (!map.has(s)) map.set(s, []);
+      if (!map.has(t)) map.set(t, []);
+      map.get(s)!.push({ to: t, linkId: id });
+      map.get(t)!.push({ to: s, linkId: id });
+
+      deg.set(s, (deg.get(s) ?? 0) + 1);
+      deg.set(t, (deg.get(t) ?? 0) + 1);
+    }
+
+    neighborsRef.current = map;
+    degreeRef.current = deg;
+
+    // Reset agents / active links à chaque rebuild des liens (sinon incohérences)
+    agentsRef.current = [];
+    activeLinksRef.current = new Set();
+    activeExpiryRef.current = new Map();
+  }, [displayData.links]);
+
+
+
   // ================================================
   // INSTANCED STARS (create once + update)
   // ================================================
@@ -727,6 +793,115 @@ export default function Map3D({
     return linksOnly ? 0.35 + w * 0.06 : 0.2 + w * 0.03;
   };
 
+
+  useEffect(() => {
+    // on active surtout quand star + liens visibles + agentLinks
+    const enabled =
+      currentLevelId === "star" &&
+      linksVisible &&
+      agentLinks &&
+      (displayData.links?.length ?? 0) > 0;
+
+    if (!enabled) return;
+
+    const pickRandomNodeId = () => {
+      const nodes = displayData.nodes as GraphNode[];
+      if (!nodes.length) return "";
+      const n = nodes[(Math.random() * nodes.length) | 0];
+      return idStr(n.id);
+    };
+
+    const ensureAgents = () => {
+      if (agentsRef.current.length === agentCount) return;
+
+      const seed = selectedNode?.id != null ? idStr(selectedNode.id) : pickRandomNodeId();
+      const next: Agent[] = [];
+      for (let i = 0; i < agentCount; i++) {
+        next.push({ nodeId: seed || pickRandomNodeId(), recent: [] });
+      }
+      agentsRef.current = next;
+    };
+
+    const chooseNext = (fromId: string, recent: string[]) => {
+      const neigh = neighborsRef.current.get(fromId) ?? [];
+      if (!neigh.length) return null;
+
+      // évite retour immédiat si possible
+      const recentSet = new Set(recent);
+      const candidates = neigh.filter((n) => !recentSet.has(n.to));
+      const pool = candidates.length ? candidates : neigh;
+
+      // anti-hub: proba ~ 1/(1+degree)
+      let sum = 0;
+      const weights = pool.map((n) => {
+        const d = degreeRef.current.get(n.to) ?? 0;
+        const w = 1 / (1 + d);
+        sum += w;
+        return w;
+      });
+
+      let r = Math.random() * sum;
+      for (let i = 0; i < pool.length; i++) {
+        r -= weights[i];
+        if (r <= 0) return pool[i];
+      }
+      return pool[0];
+    };
+
+    const tick = () => {
+      ensureAgents();
+
+      const now = performance.now();
+      const active = activeLinksRef.current;
+      const expiry = activeExpiryRef.current;
+
+      // purge TTL
+      for (const [id, t] of expiry) {
+        if (t <= now) {
+          expiry.delete(id);
+          active.delete(id);
+        }
+      }
+
+      // move + activate
+      for (const a of agentsRef.current) {
+        for (let k = 0; k < agentBudget; k++) {
+          const step = chooseNext(a.nodeId, a.recent);
+          if (!step) {
+            a.nodeId = pickRandomNodeId();
+            a.recent = [];
+            continue;
+          }
+
+          active.add(step.linkId);
+          expiry.set(step.linkId, now + agentTtlMs);
+
+          a.recent.push(a.nodeId);
+          if (a.recent.length > 4) a.recent.shift();
+
+          a.nodeId = step.to;
+        }
+      }
+
+      fgRef.current?.refresh?.();
+    };
+
+    const handle = window.setInterval(tick, agentStepMs);
+    return () => window.clearInterval(handle);
+  }, [
+    agentLinks,
+    agentCount,
+    agentBudget,
+    agentTtlMs,
+    agentStepMs,
+    currentLevelId,
+    linksVisible,
+    displayData.nodes,
+    displayData.links,
+    selectedNode,
+  ]);
+
+
   // ================================================
   // RENDER
   // ================================================
@@ -802,6 +977,19 @@ export default function Map3D({
           </label>
         </div>
 
+        <div style={{ marginTop: "12px" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#f5f5f5", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={agentLinks}
+              onChange={(e) => setAgentLinks(e.target.checked)}
+              style={{ cursor: "pointer" }}
+            />
+            Mode agents (liens explorés)
+          </label>
+        </div>
+
+
         {/* Filtre de types de relations - niveau star uniquement */}
         {currentLevelId === "star" && (
           <RelationFilter
@@ -876,6 +1064,22 @@ export default function Map3D({
           linkWidth={linkWidth as any}
           linkColor={linkColor as any}
           linkOpacity={linkOpacityFn as any}
+          linkVisibility={(link: any) => {
+            if (!linksVisible) return false;
+            if (currentLevelId !== "star") return true;
+            if (!agentLinks) return true;
+
+            const id = idStr(link.id ?? linkIdStable(link));
+            return activeLinksRef.current.has(id);
+          }}
+          linkDirectionalParticles={(link: any) => {
+            if (currentLevelId !== "star" || !agentLinks) return 0;
+            const id = idStr(link.id ?? linkIdStable(link));
+            return activeLinksRef.current.has(id) ? 2 : 0;
+          }}
+          linkDirectionalParticleSpeed={0.01 as any}
+          linkDirectionalParticleWidth={1 as any}
+
         />
       )}
     </div>

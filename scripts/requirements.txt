@@ -13,3 +13,5 @@ leidenalg>=0.10.0
 
 # Requêtes HTTP (Wikidata)
 requests>=2.31.0
+
+mwxml

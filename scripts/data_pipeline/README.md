@@ -1,26 +1,55 @@
 - importer les données de wordnet -> import-raw-data.py
+- les transformer en graphe lemma centric -> build-lemma-graph.ts
 
- ```
+```
 npx ts-node scripts/build-lemma-graph.ts \
  --input=./data/raw/omw-fr-1.4 \
  --output=./app/public/lemma-graph.json
- ```
+```
+
+- importer données de wiktionnaire
+- extraire l'étymologie brut du wiktionnaire
+- préparer les arêtes étymologiques
+
+```
+python scripts/build_wiktionary_etym_edges.py \
+  --input data/wiktionary/fr_etym_raw.jsonl \
+  --output data/etym/lemma_etym_edges.jsonl \
+  --cap-per-source 8 \
+  --cap-per-pattern etyl=5,lien=3,wikilink=1 \
+  --allow-langs la,grc,fro,frm,gmh,goh,ang,en,it,es,pt,unknown
+```
 
 
-- les transformer en graphe lemma centric -> build-lemma-graph.ts
+- merge étymologie 
+
+```
+python3 scripts/merge_etymology.py \
+  --graph app/public/lemma-graph.json \
+  --etym data/etym/lemma_etym_edges.jsonl \
+  --capPerSource 5 \
+  --capExternalDegree 200 \
+  --weight 0.2 \
+  --out app/public/lemma-graph+etym.json
+```
+
 - trouver les cluster dans la grande composante (Leiden) -> make_clusters.py
 
 ```
 python3 scripts/data_pipeline/make_clusters.py \
-  --graph app/public/lemma-graph-cleaned.json \
+  --graph app/public/lemma-graph+etym.json \
+  --exclude-etymology \
   --remove-types DERIVATION \
   --resolution 0.8 \
   --seed 123 \
+  --min-galaxy-size 20 \
   --export-galaxy-graph \
   --min-galaxy-edge 2 \
   --out-membership data/galaxy_membership.jsonl \
   --out-galaxies data/galaxies.json \
   --out-galaxy-graph data/galaxy_graph.json
+
+
 
 
 ```
@@ -36,16 +65,20 @@ python3 scripts/data_pipeline/name_galaxies.py --clusters data/galaxies.json --o
 
 ```
 python3 scripts/data_pipeline/compute_positions_cosmic.py \
-  --lemma-graph app/public/lemma-graph.json \
+  --lemma-graph app/public/lemma-graph+etym.json \
   --membership data/galaxy_membership.jsonl \
   --galaxy-graph data/galaxy_graph.json \
   --intra-layout drl \
-  --galaxy-radius-base 10 \
-  --galaxy-radius-exp 0.35 \
+  --exclude-etymology \
+  --macro-radius 300 \
+  --macro-spread-exp 0.35 \
+  --galaxy-radius-base 12 \
+  --galaxy-radius-exp 0.38 \
+  --galaxy-radius-max 70 \
   --max-intra-layout 2500 \
-  --macro-radius 140 \
   --out-galaxies-pos data/positions_galaxies.json \
   --out-stars-pos data/positions_stars.json
+
 
 ```
 

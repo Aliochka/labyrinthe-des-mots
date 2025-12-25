@@ -4,6 +4,7 @@ import argparse
 from typing import Dict, Any, Tuple, List
 from collections import Counter, defaultdict
 import hashlib
+import random
 
 import pandas as pd
 import igraph as ig
@@ -55,8 +56,6 @@ def to_igraph(nodes: pd.DataFrame, edges: pd.DataFrame) -> ig.Graph:
     g = ig.Graph(n=len(ids), directed=False)
     g.vs["id"] = ids
     g.add_edges(list(zip(e2["source"].map(idx), e2["target"].map(idx))))
-
-    # weight is important for Leiden
     g.es["weight"] = e2["weight"].tolist()
     return g
 
@@ -70,7 +69,7 @@ def apply_scenario_remove_types(
     nodes: pd.DataFrame, edges: pd.DataFrame, remove: set[str]
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Même logique que ce que tu faisais : si relationTypeCounts existe, on enlève et on recalcule weight.
+    Même logique : si relationTypeCounts existe, on enlève et on recalcule weight.
     Sinon, on filtre par presence relationTypes et on met weight = len(types restants).
     """
     e2 = edges.copy()
@@ -116,6 +115,20 @@ def apply_scenario_remove_types(
     return nodes, e2
 
 
+def filter_out_relation_type(edges: pd.DataFrame, rel: str) -> pd.DataFrame:
+    """
+    Remove edges where relationTypes contains rel.
+    If relationTypes missing/invalid, keep edge (conservative).
+    """
+    if "relationTypes" not in edges.columns:
+        return edges
+
+    def has_rel(x) -> bool:
+        return isinstance(x, list) and rel in x
+
+    return edges[~edges["relationTypes"].apply(has_rel)].copy()
+
+
 # -----------------------------
 # Galaxy IDs
 # -----------------------------
@@ -123,14 +136,12 @@ def apply_scenario_remove_types(
 
 def stable_galaxy_id(prefix: str, members: List[str], use_hash: bool) -> str:
     """
-    - Simple: prefix_<leidenClusterId>
-    - Stable-hash: prefix_<hash> basé sur la liste triée des membres (plus stable entre runs si renumérotation)
+    - Simple: prefix (ex: gc_123)
+    - Stable-hash: prefix_h<hash> basé sur membres triés (plus stable si renumérotation)
     """
     if not use_hash:
-        # caller will pass prefix like "gc_123" already
         return prefix
 
-    # hash on sorted members
     m = sorted(members)
     h = hashlib.blake2b(("|".join(m)).encode("utf-8"), digest_size=6).hexdigest()
     return f"{prefix}_h{h}"
@@ -150,7 +161,7 @@ def compute_internal_degree_tops(
     """
     Top "internes" = degré interne au sein de la galaxie (compté sur les edges intra-galaxie).
     """
-    internal_deg = defaultdict(Counter)  # galaxy -> Counter(lemma -> deg_intra)
+    internal_deg = defaultdict(Counter)
 
     for _, row in edges.iterrows():
         s = row["source"]
@@ -166,7 +177,6 @@ def compute_internal_degree_tops(
     for g, members in galaxy_members.items():
         c = internal_deg.get(g, Counter())
         if not c:
-            # fallback: juste premiers membres
             tops[g] = members[: min(topk, len(members))]
         else:
             tops[g] = [w for w, _ in c.most_common(topk)]
@@ -182,9 +192,10 @@ def build_galaxy_graph(
     edges: pd.DataFrame,
     lemma_to_galaxy: Dict[str, str],
     min_weight: int = 1,
+    exclude_void: bool = True,
 ) -> Dict[str, Any]:
     """
-    Construit un graphe agrégé galaxie<->galaxie avec poids = nb d'arêtes lemma inter-galaxies.
+    Graphe agrégé galaxie<->galaxie, poids = nb d'arêtes lemma inter-galaxies.
     """
     w = Counter()
     for _, row in edges.iterrows():
@@ -192,18 +203,52 @@ def build_galaxy_graph(
         t = row["target"]
         gs = lemma_to_galaxy.get(s)
         gt = lemma_to_galaxy.get(t)
-        if not gs or not gt or gs == gt:
+        if not gs or not gt:
+            continue
+        if exclude_void and ("void" in (gs, gt)):
+            continue
+        if gs == gt:
             continue
         a, b = (gs, gt) if gs < gt else (gt, gs)
         w[(a, b)] += 1
 
     nodes = sorted(set(lemma_to_galaxy.values()))
+    if exclude_void:
+        nodes = [n for n in nodes if n != "void"]
+
     edges_out = []
     for (a, b), cnt in w.items():
         if cnt >= min_weight:
             edges_out.append({"source": a, "target": b, "weight": int(cnt)})
 
     return {"nodes": [{"id": n} for n in nodes], "edges": edges_out}
+
+
+# -----------------------------
+# Seed helper
+# -----------------------------
+
+
+def seed_leiden(seed: int):
+    """
+    Leiden seed varie selon versions.
+    On fait au mieux:
+    - set_rng_seed si dispo
+    - sinon seed Python random (et numpy si dispo)
+    """
+    random.seed(seed)
+    try:
+        import numpy as np  # type: ignore
+
+        np.random.seed(seed)
+    except Exception:
+        pass
+
+    if hasattr(leidenalg, "set_rng_seed"):
+        try:
+            leidenalg.set_rng_seed(seed)
+        except Exception:
+            pass
 
 
 # -----------------------------
@@ -218,28 +263,28 @@ def main():
     ap.add_argument("--out-galaxies", default="galaxies.json")
     ap.add_argument("--out-galaxy-graph", default="galaxy_graph.json")
     ap.add_argument("--export-galaxy-graph", action="store_true")
-    ap.add_argument(
-        "--min-galaxy-edge",
-        type=int,
-        default=2,
-        help="min weight for galaxy<->galaxy edges",
-    )
+    ap.add_argument("--min-galaxy-edge", type=int, default=2, help="min weight for galaxy<->galaxy edges")
+
     ap.add_argument("--resolution", type=float, default=0.8)
     ap.add_argument("--seed", type=int, default=123)
     ap.add_argument("--topk", type=int, default=50)
+
+    ap.add_argument("--remove-types", default="", help="comma separated types to remove (ex: DERIVATION)")
+    ap.add_argument("--use-hash-ids", action="store_true", help="stable galaxy ids based on member-hash")
+
     ap.add_argument(
-        "--scenario", default="baseline", help="baseline | removeTypes[DERIVATION] etc."
-    )
-    ap.add_argument(
-        "--remove-types",
-        default="",
-        help="comma separated types to remove (ex: DERIVATION)",
-    )
-    ap.add_argument(
-        "--use-hash-ids",
+        "--exclude-etymology",
         action="store_true",
-        help="stable galaxy ids based on member-hash",
+        help="Ignore edges whose relationTypes contains 'ETYMOLOGY' (recommended for clustering)",
     )
+
+    ap.add_argument(
+        "--min-galaxy-size",
+        type=int,
+        default=20,
+        help="Minimum size to keep a galaxy in galaxies.json; smaller ones become 'void' in membership",
+    )
+
     args = ap.parse_args()
 
     if leidenalg is None:
@@ -247,9 +292,16 @@ def main():
 
     nodes, edges = load_lemma_graph(args.graph)
 
-    # Scenario
+    # Exclude ETYMOLOGY edges for clustering (recommended)
+    if args.exclude_etymology:
+        before = len(edges)
+        edges = filter_out_relation_type(edges, "ETYMOLOGY")
+        after = len(edges)
+        print(f"🧹 Excluded ETYMOLOGY edges: {before - after} removed ({before} → {after})")
+
+    # Scenario: remove edge types
     if args.remove_types.strip():
-        rm = set([t.strip() for t in args.remove_types.split(",") if t.strip()])
+        rm = {t.strip() for t in args.remove_types.split(",") if t.strip()}
         nodes, edges = apply_scenario_remove_types(nodes, edges, rm)
 
     g = to_igraph(nodes, edges)
@@ -265,7 +317,7 @@ def main():
 
     ids = g.vs["id"]
 
-    # Build mapping for ALL nodes: default "void" then fill
+    # Build mapping for ALL nodes
     lemma_to_galaxy: Dict[str, str] = {}
 
     # isolates (deg 0) -> void
@@ -275,84 +327,107 @@ def main():
             lemma_to_galaxy[lemma] = "void"
 
     # small components (non-GC, non-isolates) -> gc_small_<k>
+    # (they will be potentially collapsed to void if < min_galaxy_size)
     small_comp_id = 0
+    small_comp_members: Dict[str, List[str]] = {}
     for ci, verts in enumerate(comps):
         if ci == gc_comp_index:
             continue
         vlist = list(verts)
         if not vlist:
             continue
-        # if all isolates, already handled as void
         if all(deg[v] == 0 for v in vlist):
             continue
         gid = f"gc_small_{small_comp_id}"
         small_comp_id += 1
+        members = [ids[v] for v in vlist]
+        small_comp_members[gid] = members
         for v in vlist:
             lemma_to_galaxy[ids[v]] = gid
 
     # Leiden on GC only
     gc = g.subgraph(list(gc_set))
+    seed_leiden(args.seed)
+
+    # some versions accept seed=...; harmless if not
     try:
-        leidenalg.set_rng_seed(args.seed)
-    except Exception:
-        pass
+        part = leidenalg.find_partition(
+            gc,
+            leidenalg.RBConfigurationVertexPartition,
+            weights=gc.es["weight"],
+            resolution_parameter=args.resolution,
+            seed=args.seed,
+        )
+    except TypeError:
+        part = leidenalg.find_partition(
+            gc,
+            leidenalg.RBConfigurationVertexPartition,
+            weights=gc.es["weight"],
+            resolution_parameter=args.resolution,
+        )
 
-    part = leidenalg.find_partition(
-        gc,
-        leidenalg.RBConfigurationVertexPartition,
-        weights=gc.es["weight"],
-        resolution_parameter=args.resolution,
-    )
-
-    # membership on GC
     mem = list(part.membership)
     gc_ids = gc.vs["id"]
 
-    # galaxy members (raw cluster ids)
     raw_members: Dict[int, List[str]] = defaultdict(list)
     for lemma, cid in zip(gc_ids, mem):
         raw_members[int(cid)].append(lemma)
 
-    # assign galaxy ids
-    galaxy_members: Dict[str, List[str]] = {}
+    # assign galaxy ids for GC clusters
+    galaxy_members_all: Dict[str, List[str]] = {}
     for cid, members in raw_members.items():
         base = f"gc_{cid}"
         gid = stable_galaxy_id(base, members, use_hash=args.use_hash_ids)
-        galaxy_members[gid] = members
+        galaxy_members_all[gid] = members
         for lemma in members:
             lemma_to_galaxy[lemma] = gid
 
-    # any remaining nodes not assigned? (shouldn’t happen, but safe)
+    # any remaining nodes not assigned? -> void
     for lemma in ids:
         if lemma not in lemma_to_galaxy:
             lemma_to_galaxy[lemma] = "void"
 
-    # internal tops
-    tops = compute_internal_degree_tops(
-        edges, lemma_to_galaxy, galaxy_members, topk=args.topk
-    )
+    # Merge in small components into galaxy_members_all (for sizing/filtering)
+    for gid, members in small_comp_members.items():
+        galaxy_members_all[gid] = members
+
+    # Collapse too-small galaxies into void (membership-level)
+    min_size = int(args.min_galaxy_size)
+    collapsed = 0
+    for gid, members in galaxy_members_all.items():
+        if gid == "void":
+            continue
+        if len(members) < min_size:
+            for lemma in members:
+                lemma_to_galaxy[lemma] = "void"
+            collapsed += 1
+
+    if collapsed:
+        print(f"🧽 Collapsed small galaxies (<{min_size}) into void: {collapsed}")
+
+    # Rebuild kept galaxies list AFTER collapsing
+    kept_members: Dict[str, List[str]] = defaultdict(list)
+    for lemma in ids:
+        gid = lemma_to_galaxy.get(lemma, "void")
+        if gid != "void":
+            kept_members[gid].append(lemma)
+
+    # Compute tops for kept galaxies
+    tops_kept = compute_internal_degree_tops(edges, lemma_to_galaxy, kept_members, topk=args.topk)
 
     # write membership jsonl
     with open(args.out_membership, "w", encoding="utf-8") as f:
         for lemma in nodes["lemma"].tolist():
-            f.write(
-                json.dumps(
-                    {"lemma": lemma, "galaxy": lemma_to_galaxy.get(lemma, "void")},
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
+            f.write(json.dumps({"lemma": lemma, "galaxy": lemma_to_galaxy.get(lemma, "void")}, ensure_ascii=False) + "\n")
 
-    # galaxies summary
+    # galaxies summary (kept only)
     galaxies_out = []
-    for gid, members in sorted(
-        galaxy_members.items(), key=lambda kv: len(kv[1]), reverse=True
-    ):
+    for gid, members in sorted(kept_members.items(), key=lambda kv: len(kv[1]), reverse=True):
         galaxies_out.append(
             {
                 "galaxy": gid,
                 "size": len(members),
-                "top": tops.get(gid, [])[: args.topk],
+                "top": tops_kept.get(gid, [])[: args.topk],
                 "sample": members[:50],
             }
         )
@@ -362,12 +437,13 @@ def main():
         "resolution": args.resolution,
         "seed": args.seed,
         "use_hash_ids": bool(args.use_hash_ids),
+        "min_galaxy_size": min_size,
         "counts": {
             "n_nodes": int(g.vcount()),
             "n_edges": int(g.ecount()),
             "gc_nodes": int(gc.vcount()),
             "gc_edges": int(gc.ecount()),
-            "n_galaxies_gc": int(len(galaxy_members)),
+            "n_galaxies": int(len(kept_members)),
             "n_small_components": int(small_comp_id),
             "n_void": int(sum(1 for v in lemma_to_galaxy.values() if v == "void")),
         },
@@ -377,9 +453,9 @@ def main():
     with open(args.out_galaxies, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
-    # galaxy graph (for macro layout)
+    # galaxy graph (macro layout) — only kept galaxies, no void
     if args.export_galaxy_graph:
-        gg = build_galaxy_graph(edges, lemma_to_galaxy, min_weight=args.min_galaxy_edge)
+        gg = build_galaxy_graph(edges, lemma_to_galaxy, min_weight=args.min_galaxy_edge, exclude_void=True)
         with open(args.out_galaxy_graph, "w", encoding="utf-8") as f:
             json.dump(gg, f, ensure_ascii=False, indent=2)
 
