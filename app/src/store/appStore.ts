@@ -6,7 +6,7 @@ import { getDefaultEnabledRelations } from "../constants/relationTypes";
 const linkKey = (l: GraphLink) => `${l.source}-${l.target}`;
 
 // Version du store pour gérer les migrations
-const STORE_VERSION = 2;
+const STORE_VERSION = 3;
 
 interface AppState {
     // --- exploration de mots ---
@@ -121,6 +121,19 @@ export const useAppStore = create<AppState>((set, get) => ({
             set({ storeVersion: 2 });
 
             console.log('[Migration] ✓ Store migrated to v2 (universe.json)');
+        }
+
+        // Migration v2 → v3 (nouvelle catégorisation des relations)
+        if (currentVersion < 3) {
+            console.log('[Migration] Migrating store from v2 to v3...');
+
+            // Réinitialiser les filtres de relations avec les nouvelles catégories
+            set({
+                enabledRelationTypes: getDefaultEnabledRelations(),
+                storeVersion: 3
+            });
+
+            console.log('[Migration] ✓ Store migrated to v3 (2-category relation filtering)');
         }
     }
 }));

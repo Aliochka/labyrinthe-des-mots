@@ -56,7 +56,7 @@ export class LemmaDataService {
   private async loadLemmaAtlas(): Promise<void> {
     try {
       // Load lemma graph (nodes + edges)
-      const graphResponse = await fetch('/lemma-graph.json');
+      const graphResponse = await fetch('/lemma-graph+etym.json');
       if (!graphResponse.ok) {
         throw new Error(`Failed to load lemma graph: ${graphResponse.status}`);
       }

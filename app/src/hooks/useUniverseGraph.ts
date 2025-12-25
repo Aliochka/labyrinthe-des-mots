@@ -9,7 +9,7 @@ import type {
 } from '../types/graph';
 
 const UNIVERSE_URL = '/universe.json';
-const LEMMA_GRAPH_URL = '/lemma-graph.json';
+const LEMMA_GRAPH_URL = '/lemma-graph+etym.json';
 
 interface UseUniverseGraphResult {
   graphData: UniverseGraphData | null;
@@ -181,6 +181,7 @@ function buildUniverseGraphData(
       nodes: starNodes,
       links: starEdges
     },
+    bundles: universe.bundles,  // Propager les bundles depuis universe.json
     galaxyMembersMap,
     starIndex
   };

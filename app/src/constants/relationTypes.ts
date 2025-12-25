@@ -13,51 +13,23 @@ export interface RelationTypeConfig {
 }
 
 /**
- * Top 6 types de relations par fréquence
- * Basé sur les statistiques WordNet/OMW-FR
+ * Catégories de relations simplifiées
+ * Basé sur lemma-graph+etym.json
  */
 export const RELATION_TYPES: RelationTypeConfig[] = [
   {
-    id: 'HYPERNYM',
-    label: 'Hyperonyme',
-    color: '#4ecdc4',
-    description: 'Généralisation (ex: animal → mammifère)',
-    enabledByDefault: true,
-  },
-  {
-    id: 'HYPONYM',
-    label: 'Hyponyme',
-    color: '#45b7d1',
-    description: 'Spécialisation (ex: chien → animal)',
-    enabledByDefault: true,
-  },
-  {
-    id: 'ANTONYM',
-    label: 'Antonyme',
+    id: 'ETYMOLOGY',
+    label: 'Étymologique',
     color: '#ff6b6b',
-    description: 'Opposé (ex: chaud ↔ froid)',
+    description: 'Relations étymologiques entre mots',
     enabledByDefault: true,
   },
   {
-    id: 'DERIVATION',
-    label: 'Dérivation',
-    color: '#96ceb4',
-    description: 'Forme dérivée (ex: courir → coureur)',
+    id: 'SEMANTIC',
+    label: 'Sémantique',
+    color: '#4ecdc4',
+    description: 'Relations sémantiques (hyperonyme, antonyme, etc.)',
     enabledByDefault: true,
-  },
-  {
-    id: 'SIMILAR_TO',
-    label: 'Similaire',
-    color: '#ffeaa7',
-    description: 'Similitude sémantique',
-    enabledByDefault: false,
-  },
-  {
-    id: 'MERONYM',
-    label: 'Méronyme',
-    color: '#dfe6e9',
-    description: 'Partie de (ex: roue → voiture)',
-    enabledByDefault: false,
   },
 ];
 
@@ -71,18 +43,20 @@ export const getDefaultEnabledRelations = (): Set<string> => {
 };
 
 /**
- * Normaliser un type de relation pour gérer les variations
+ * Normaliser un type de relation pour mapper vers les 2 catégories
  * @param relType - Type de relation brut
- * @returns Type normalisé
+ * @returns Type normalisé (ETYMOLOGY ou SEMANTIC)
  */
 export const normalizeRelationType = (relType: string): string => {
   const normalized = relType.toUpperCase().trim();
 
-  // Regrouper les variations de MERONYM/HOLONYM
-  // (MEMBER_MERONYM, PART_HOLONYM, etc. → MERONYM)
-  if (normalized.includes('MERONYM') || normalized.includes('HOLONYM')) {
-    return 'MERONYM';
+  // Relations étymologiques
+  if (normalized === 'ETYMOLOGY') {
+    return 'ETYMOLOGY';
   }
 
-  return normalized;
+  // Toutes les autres relations sont sémantiques
+  // (HYPERNYM, HYPONYM, ANTONYM, DERIVATION, SIMILAR_TO, MERONYM,
+  //  ALSO_SEE, ATTRIBUTE, CAUSES, ENTAILMENT, PERTAINYM, etc.)
+  return 'SEMANTIC';
 };

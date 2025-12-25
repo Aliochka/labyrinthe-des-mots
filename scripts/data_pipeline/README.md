@@ -2,17 +2,21 @@
 - les transformer en graphe lemma centric -> build-lemma-graph.ts
 
 ```
-npx ts-node scripts/build-lemma-graph.ts \
+npx ts-node scripts/data_pipeline/build-lemma-graph.ts \
  --input=./data/raw/omw-fr-1.4 \
  --output=./app/public/lemma-graph.json
 ```
 
 - importer données de wiktionnaire
-- extraire l'étymologie brut du wiktionnaire
-- préparer les arêtes étymologiques
+
+-> https://dumps.wikimedia.org/frwiktionary/latest/
+frwiktionary-latest-pages-articles.xml.bz2         20-Dec-2025 14:28           845708126
+
+- extraire l'étymologie brut du wiktionnaire scripts/data_pipeline/extract_frwiktionary_etym_raw.py
+- préparer les arêtes étymologiques scripts/data_pipeline/build_wiktionary_etym_edges.py
 
 ```
-python scripts/build_wiktionary_etym_edges.py \
+python scripts/data_pipeline/build_wiktionary_etym_edges.py \
   --input data/wiktionary/fr_etym_raw.jsonl \
   --output data/etym/lemma_etym_edges.jsonl \
   --cap-per-source 8 \
@@ -21,10 +25,10 @@ python scripts/build_wiktionary_etym_edges.py \
 ```
 
 
-- merge étymologie 
+- merge étymologie merge_etymology.py
 
 ```
-python3 scripts/merge_etymology.py \
+python3 scripts/data_pipeline/merge_etymology.py \
   --graph app/public/lemma-graph.json \
   --etym data/etym/lemma_etym_edges.jsonl \
   --capPerSource 5 \

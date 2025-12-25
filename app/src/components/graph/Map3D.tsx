@@ -147,6 +147,15 @@ export default function Map3D({
   }, [graphData]);
 
   // ================================================
+  // GALAXY BUNDLES depuis graphData
+  // ================================================
+  const galaxyBundles = useMemo(() => {
+    return graphData?.bundles?.galaxy?.routes ?? [];
+  }, [graphData]);
+
+
+
+  // ================================================
   // NIVEAUX
   // ================================================
   const levels = useMemo(() => {
@@ -163,23 +172,9 @@ export default function Map3D({
   const [center, setCenter] = useState(new THREE.Vector3(0, 0, 0));
   const [cameraDistance, setCameraDistance] = useState(Infinity);
   const [radiusMean, setRadiusMean] = useState(1);
-  type Agent = {
-    nodeId: string;
-    recent: string[]; // petite mémoire anti ping-pong
-  };
-
-  const [agentLinks, setAgentLinks] = useState(true);
-  const [agentCount, setAgentCount] = useState(12);
-  const [agentBudget, setAgentBudget] = useState(2); // nb d’activations par tick / agent
-  const [agentTtlMs, setAgentTtlMs] = useState(2500);
-  const [agentStepMs, setAgentStepMs] = useState(50);
 
   const neighborsRef = useRef<Map<string, Array<{ to: string; linkId: string }>>>(new Map());
   const degreeRef = useRef<Map<string, number>>(new Map());
-
-  const agentsRef = useRef<Agent[]>([]);
-  const activeLinksRef = useRef<Set<string>>(new Set());
-  const activeExpiryRef = useRef<Map<string, number>>(new Map());
 
   const currentLevelId: LevelId | undefined = levels[levelIdx]?.id;
 
@@ -251,10 +246,12 @@ export default function Map3D({
 
 
     if (currentLevelId === "star") {
+      // Filtrer par type de relation D'ABORD (toujours appliqué, même si liens cachés ensuite par LOD)
+      filteredLinks = filterGraphLinks(filteredLinks, enabledRelationTypes);
+
       const forceLinks = linksOnly; // ✅ override utilisateur
       if (shouldShowStarLinks || forceLinks) {
-        filteredLinks = filterGraphLinks(filteredLinks, enabledRelationTypes);
-
+        // Downsampling pour performance si trop de liens
         if (filteredLinks.length > MAX_STAR_LINKS_RENDER) {
           const step = Math.ceil(filteredLinks.length / MAX_STAR_LINKS_RENDER);
           filteredLinks = filteredLinks.filter((_, i) => i % step === 0);
@@ -263,11 +260,16 @@ export default function Map3D({
         filteredLinks = [];
       }
     }
-    // --- ensure stable id on links (required for agent visibility) ---
+    // --- ensure stable id on links ---
     filteredLinks = filteredLinks.map((l: any) => {
       if (!l.id) l.id = linkIdStable(l);
       return l;
     });
+
+    if (currentLevelId === "galaxy") {
+      // On laisse les liens de ForceGraph vides : les bundles sont dessinés en layer Three
+      filteredLinks = [];
+    }
 
     return { nodes, links: filteredLinks };
   }, [
@@ -341,7 +343,7 @@ export default function Map3D({
 
       let n = displayNodeById.get(sid);
       if (!n && (galaxyDataService as any)?.getNodeById) {
-        n = (galaxyDataService as any).getNodeById(sid) as GraphNode | null;
+        n = (galaxyDataService as any).getNodeById(sid) as GraphNode | undefined;
       }
 
       if (n && n.x != null && n.y != null && (n as any).z != null) {
@@ -374,6 +376,64 @@ export default function Map3D({
       mat.dispose();
     };
   }, [visibleNavigationNodeIds, displayNodeById]);
+
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    const scene: THREE.Scene = fg.scene();
+
+    // clear old layer
+    const old = scene.getObjectByName("galaxy-bundles");
+    if (old) {
+      scene.remove(old);
+      old.traverse((obj: any) => {
+        if (obj.geometry) obj.geometry.dispose?.();
+        if (obj.material) obj.material.dispose?.();
+      });
+    }
+
+    // bundles only in galaxy level, and only if not linksOnly (au choix)
+    if (currentLevelId !== "galaxy") return;
+    if (!galaxyBundles.length) return;
+    if (linksOnly) return; // option: si linksOnly, tu veux peut-être n'afficher QUE bundles → mets false si tu préfères
+
+    const group = new THREE.Group();
+    group.name = "galaxy-bundles";
+
+    const mat = new THREE.LineBasicMaterial({
+      color: 0xffd296,
+      transparent: true,
+      opacity: 0.25,
+    });
+
+    for (const r of galaxyBundles) {
+      const curve = new THREE.CatmullRomCurve3(
+        r.points.map((p: number[]) => new THREE.Vector3(p[0], p[1], p[2])),
+        false,
+        "catmullrom",
+        0.6
+      );
+      const pts = curve.getPoints(24);
+      const geom = new THREE.BufferGeometry().setFromPoints(pts);
+
+      const line = new THREE.Line(geom, mat);
+      // option: encodage “poids” → opacité légère par route
+      // (mais attention: LineBasicMaterial est partagé; si tu veux varier, clone mat)
+      group.add(line);
+    }
+
+    scene.add(group);
+
+    return () => {
+      scene.remove(group);
+      group.traverse((obj: any) => {
+        if (obj.geometry) obj.geometry.dispose?.();
+        // mat est partagé → ne pas dispose ici (ou clone par line si tu veux varier)
+      });
+      mat.dispose();
+    };
+  }, [currentLevelId, galaxyBundles, linksOnly]);
+
 
   // ================================================
   // FADE-IN DOUX AU DÉMARRAGE
@@ -559,11 +619,6 @@ export default function Map3D({
 
     neighborsRef.current = map;
     degreeRef.current = deg;
-
-    // Reset agents / active links à chaque rebuild des liens (sinon incohérences)
-    agentsRef.current = [];
-    activeLinksRef.current = new Set();
-    activeExpiryRef.current = new Map();
   }, [displayData.links]);
 
 
@@ -793,115 +848,6 @@ export default function Map3D({
     return linksOnly ? 0.35 + w * 0.06 : 0.2 + w * 0.03;
   };
 
-
-  useEffect(() => {
-    // on active surtout quand star + liens visibles + agentLinks
-    const enabled =
-      currentLevelId === "star" &&
-      linksVisible &&
-      agentLinks &&
-      (displayData.links?.length ?? 0) > 0;
-
-    if (!enabled) return;
-
-    const pickRandomNodeId = () => {
-      const nodes = displayData.nodes as GraphNode[];
-      if (!nodes.length) return "";
-      const n = nodes[(Math.random() * nodes.length) | 0];
-      return idStr(n.id);
-    };
-
-    const ensureAgents = () => {
-      if (agentsRef.current.length === agentCount) return;
-
-      const seed = selectedNode?.id != null ? idStr(selectedNode.id) : pickRandomNodeId();
-      const next: Agent[] = [];
-      for (let i = 0; i < agentCount; i++) {
-        next.push({ nodeId: seed || pickRandomNodeId(), recent: [] });
-      }
-      agentsRef.current = next;
-    };
-
-    const chooseNext = (fromId: string, recent: string[]) => {
-      const neigh = neighborsRef.current.get(fromId) ?? [];
-      if (!neigh.length) return null;
-
-      // évite retour immédiat si possible
-      const recentSet = new Set(recent);
-      const candidates = neigh.filter((n) => !recentSet.has(n.to));
-      const pool = candidates.length ? candidates : neigh;
-
-      // anti-hub: proba ~ 1/(1+degree)
-      let sum = 0;
-      const weights = pool.map((n) => {
-        const d = degreeRef.current.get(n.to) ?? 0;
-        const w = 1 / (1 + d);
-        sum += w;
-        return w;
-      });
-
-      let r = Math.random() * sum;
-      for (let i = 0; i < pool.length; i++) {
-        r -= weights[i];
-        if (r <= 0) return pool[i];
-      }
-      return pool[0];
-    };
-
-    const tick = () => {
-      ensureAgents();
-
-      const now = performance.now();
-      const active = activeLinksRef.current;
-      const expiry = activeExpiryRef.current;
-
-      // purge TTL
-      for (const [id, t] of expiry) {
-        if (t <= now) {
-          expiry.delete(id);
-          active.delete(id);
-        }
-      }
-
-      // move + activate
-      for (const a of agentsRef.current) {
-        for (let k = 0; k < agentBudget; k++) {
-          const step = chooseNext(a.nodeId, a.recent);
-          if (!step) {
-            a.nodeId = pickRandomNodeId();
-            a.recent = [];
-            continue;
-          }
-
-          active.add(step.linkId);
-          expiry.set(step.linkId, now + agentTtlMs);
-
-          a.recent.push(a.nodeId);
-          if (a.recent.length > 4) a.recent.shift();
-
-          a.nodeId = step.to;
-        }
-      }
-
-      fgRef.current?.refresh?.();
-    };
-
-    const handle = window.setInterval(tick, agentStepMs);
-    return () => window.clearInterval(handle);
-  }, [
-    agentLinks,
-    agentCount,
-    agentBudget,
-    agentTtlMs,
-    agentStepMs,
-    currentLevelId,
-    linksVisible,
-    displayData.nodes,
-    displayData.links,
-    selectedNode,
-  ]);
-
-
   // ================================================
   // RENDER
   // ================================================
@@ -977,19 +923,6 @@ export default function Map3D({
           </label>
         </div>
 
-        <div style={{ marginTop: "12px" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#f5f5f5", cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={agentLinks}
-              onChange={(e) => setAgentLinks(e.target.checked)}
-              style={{ cursor: "pointer" }}
-            />
-            Mode agents (liens explorés)
-          </label>
-        </div>
-
-
         {/* Filtre de types de relations - niveau star uniquement */}
         {currentLevelId === "star" && (
           <RelationFilter
@@ -1064,19 +997,8 @@ export default function Map3D({
           linkWidth={linkWidth as any}
           linkColor={linkColor as any}
           linkOpacity={linkOpacityFn as any}
-          linkVisibility={(link: any) => {
-            if (!linksVisible) return false;
-            if (currentLevelId !== "star") return true;
-            if (!agentLinks) return true;
-
-            const id = idStr(link.id ?? linkIdStable(link));
-            return activeLinksRef.current.has(id);
-          }}
-          linkDirectionalParticles={(link: any) => {
-            if (currentLevelId !== "star" || !agentLinks) return 0;
-            const id = idStr(link.id ?? linkIdStable(link));
-            return activeLinksRef.current.has(id) ? 2 : 0;
-          }}
+          linkVisibility={() => linksVisible}
+          linkDirectionalParticles={0}
           linkDirectionalParticleSpeed={0.01 as any}
           linkDirectionalParticleWidth={1 as any}
 

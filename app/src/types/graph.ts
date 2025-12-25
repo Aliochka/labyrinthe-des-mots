@@ -116,6 +116,13 @@ export interface StarNode {
 }
 
 // Structure of universe.json
+export interface GalaxyBundleRoute {
+  a: string;
+  b: string;
+  weight: number;
+  points: number[][];  // Array de [x, y, z]
+}
+
 export interface UniverseData {
   meta: {
     galaxies: number;
@@ -123,6 +130,11 @@ export interface UniverseData {
   };
   galaxies: GalaxyNode[];
   stars: StarNode[];
+  bundles?: {                        // Optionnel pour rétrocompat
+    galaxy?: {
+      routes: GalaxyBundleRoute[];
+    };
+  };
 }
 
 // Unified graph data structure (replaces MultiScaleGraph legacy)
@@ -134,6 +146,11 @@ export interface UniverseGraphData {
   stars: {
     nodes: GraphNode[];
     links: GraphLink[];
+  };
+  bundles?: {
+    galaxy?: {
+      routes: GalaxyBundleRoute[];
+    };
   };
   // Performance indexes
   galaxyMembersMap: Map<string, string[]>;  // galaxyId -> starIds[]

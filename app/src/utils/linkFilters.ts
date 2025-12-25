@@ -11,27 +11,16 @@ import { normalizeRelationType } from '../constants/relationTypes';
 /**
  * Vérifie si un lien doit être visible selon les types de relations activés
  *
- * @param link - Lien du graphe avec champ relType
- * @param enabledTypes - Set des types de relations activés (IDs en majuscules)
+ * @param link - Lien du graphe avec champ relType et relationTypes
+ * @param enabledTypes - Set des types de relations activés (ETYMOLOGY ou SEMANTIC)
  * @returns true si le lien doit être affiché
  */
 export const isLinkVisible = (
   link: GraphLink,
   enabledTypes: Set<string>
 ): boolean => {
-  const relType = link.relType;
-
-  // Pas de relType défini : c'est probablement un lien agrégé de niveau cluster
-  // On les affiche toujours (ils ne représentent pas un type de relation unique)
-  if (!relType) return true;
-
-  // Liens agrégés de niveau cluster (ex: "aggregated_5", "w42")
-  // Ces liens combinent plusieurs types de relations, donc on les affiche toujours
-  if (relType.startsWith('aggregated_') || relType.startsWith('w')) {
-    return true;
-  }
-
-  // Si le lien possède un tableau relationTypes (liens de niveau planet)
+  // Tous les liens (star et galaxy) ont un tableau relationTypes
+  // On filtre basé sur ce tableau
   if ('relationTypes' in link && Array.isArray((link as any).relationTypes)) {
     const relationTypes = (link as any).relationTypes as string[];
 
@@ -42,9 +31,8 @@ export const isLinkVisible = (
     });
   }
 
-  // Fallback : traiter relType comme un type de relation unique
-  const normalized = normalizeRelationType(relType);
-  return enabledTypes.has(normalized);
+  // Fallback : afficher les liens sans relationTypes (ne devrait jamais arriver)
+  return true;
 };
 
 /**
