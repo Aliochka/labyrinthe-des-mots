@@ -8,18 +8,26 @@
 import { useRef, useState, useMemo, useEffect, useCallback } from "react";
 import ForceGraph3D from "react-force-graph-3d";
 import * as THREE from "three";
-import { ControlPanel } from "../ui/ControlPanel";
-import { RelationFilter } from "../ui/RelationFilter";
-import { useAppStore } from "../../store/appStore";
-import { useLODSystem } from "../../hooks/useLODSystem";
+import { ControlPanel } from "../../ui/ControlPanel";
+import { RelationFilter } from "../../ui/RelationFilter";
+import { useAppStore } from "../../../store/appStore";
+import { useLODSystem } from "../../../hooks/useLODSystem";
 import type {
   UniverseGraphData,
   GraphData,
   GraphNode,
   GraphLink,
   LevelId,
-} from "../../types/graph";
-import { galaxyDataService } from "../../services/GalaxyDataService";
+} from "../../../types/graph";
+import { galaxyDataService } from "../../../services/GalaxyDataService";
+// Utils and constants
+import { idStr, linkEndId, linkIdStable } from "./utils/idUtils";
+import { hashString } from "./utils/hashUtils";
+import { ensureIncludedNodes } from "./utils/nodeFiltering";
+import { getGalaxyColor, computeStarVisual } from "./utils/visualUtils";
+import { sampleStarsForTethers, buildTetherCurve } from "./utils/samplingUtils";
+import { useGalaxyMaterials } from "./hooks/useGalaxyMaterials";
+import { MAX_NODES_RENDER, DEBUG_PANEL, SHOW_BOUNDING_BOX_HELPER } from "./constants";
 
 interface Props {
   graphData: UniverseGraphData | null;
@@ -28,246 +36,14 @@ interface Props {
   backgroundColor?: string;
 }
 
-// Limites de rendu (réduit pour éviter WebGL context lost)
-const MAX_NODES_RENDER = 20000;
-
-// Pool matériaux galaxies (évite leak GPU)
-const GALAXY_MAT_POOL_SIZE = 64;
-
-// Debug helpers (à false en prod)
-const DEBUG_PANEL = true;
-const SHOW_BOUNDING_BOX_HELPER = false;
-
-function idStr(v: any) {
-  return String(v ?? "");
-}
-function linkEndId(v: any) {
-  if (v == null) return "";
-  // si ForceGraph a muté en objet node
-  if (typeof v === "object") return idStr((v as any).id);
-  return idStr(v);
-}
-
-function linkIdStable(link: any) {
-  // source/target peuvent être ids ou objets (ForceGraph)
-  const s = linkEndId(link.source);
-  const t = linkEndId(link.target);
-  const type = idStr(link.relType ?? link.type ?? "");
-  // on canonicalise pour éviter s-t vs t-s si tu veux un id “undirected”
-  const a = s < t ? s : t;
-  const b = s < t ? t : s;
-  return `${a}__${b}__${type}`;
-}
-
-
-
-function hashString(s: string) {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h | 0;
-}
-
-function ensureIncludedNodes(
-  sampledNodes: GraphNode[],
-  allNodes: GraphNode[],
-  mustIncludeIds: Set<string>
-): GraphNode[] {
-  if (!mustIncludeIds.size) return sampledNodes;
-
-  const out = sampledNodes.slice();
-  const outSet = new Set(out.map((n) => idStr(n.id)));
-
-  const allById = new Map<string, GraphNode>();
-  for (const n of allNodes) allById.set(idStr(n.id), n);
-
-  for (const id of mustIncludeIds) {
-    if (outSet.has(id)) continue;
-    const n = allById.get(id);
-    if (n) {
-      out.push(n);
-      outSet.add(id);
-    }
-  }
-  return out;
-}
-
-/**
- * Génère une couleur unique et stable pour chaque galaxie
- * Distribue les teintes uniformément sur le cercle chromatique
- */
-function getGalaxyColor(galaxyId: string): THREE.Color {
-  // Extraire le numéro de la galaxie (ex: "gc_0" -> 0)
-  const match = galaxyId.match(/\d+/);
-  const num = match ? parseInt(match[0]) : 0;
-
-  // Distribuer les teintes sur 360° pour 46 galaxies
-  const hue = (num * 137.5) % 360 / 360;  // 137.5° = golden angle pour meilleure distribution
-  const saturation = 0.85;  // Couleurs vives
-  const lightness = 0.55;   // Ni trop sombre, ni trop clair
-
-  const color = new THREE.Color();
-  color.setHSL(hue, saturation, lightness);
-  return color;
-}
-
-function computeGalaxyCenterVisual(node: any) {
-  // Centres de galaxies : plus gros, couleur de leur galaxie
-  const radius = 3.0;  // Beaucoup plus gros que les stars
-  const color = getGalaxyColor(node.id);  // Couleur unique par galaxie
-  const opacity = 0.95;  // Très visible
-  return { radius, color, opacity };
-}
-
-function computeStarVisual(node: any, isSelected: boolean, galaxyId?: string) {
-  // Si c'est un centre de galaxie
-  if (node.__isGalaxyCenter) {
-    return computeGalaxyCenterVisual(node);
-  }
-
-  // Calculer densité/intensité pour le rayon
-  const d = node.density ?? 0;
-  const deg = node.degree ?? 0;
-  const intensityFromDeg = Math.min(1, Math.log10(deg + 2) / 2);
-  const density = d > 0 ? d : intensityFromDeg;
-
-  const levelScale = 0.4; // star level (réduit pour des étoiles plus petites)
-  const baseR = 0.7 * levelScale;
-  const intensity = 0.35 + 0.65 * density;
-
-  const radius = isSelected
-    ? (baseR + intensity * 1.1) * 1.8
-    : baseR + intensity * 1.1;
-
-  const color = new THREE.Color();
-  if (isSelected) {
-    color.set(0x4ecdc4);  // Cyan pour sélection
-  } else if (galaxyId !== undefined && galaxyId !== 'void') {
-    // Couleur unique par galaxie (normalisée en string)
-    color.copy(getGalaxyColor(galaxyId));
-  } else {
-    // Couleur par densité pour les nœuds isolés (void)
-    color.setHSL(0.78 - 0.3 * intensity, 1, 0.45 + 0.3 * intensity);
-  }
-
-  const opacity = isSelected ? 1.0 : 0.55 + 0.45 * intensity;
-  return { radius, color, opacity };
-}
-
-/**
- * Hash simple et stable pour un string (Java hashCode)
- */
-function simpleHash(str: string): number {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;  // Convert to 32bit integer
-  }
-  return Math.abs(hash);
-}
-
-/**
- * Échantillonne les stars pour les tethers avec sampling stable
- *
- * @param nodes - Tous les nœuds actuellement affichés
- * @param selectedNode - Nœud sélectionné (toujours inclus)
- * @param trailIds - IDs du trail (toujours inclus)
- * @param starIndex - Index starId → StarNode pour vérifier galaxy
- * @returns Liste des stars à afficher comme tethers
- */
-function sampleStarsForTethers(
-  nodes: GraphNode[],
-  selectedNode: GraphNode | null,
-  trailIds: string[],
-  starIndex: Map<string, any>
-): GraphNode[] {
-  const TARGET_SAMPLE_SIZE = 1500;  // Viser ~1500 tethers (5% de 66k)
-  const sampled: GraphNode[] = [];
-  const includedIds = new Set<string>();
-
-  // 1. TOUJOURS inclure selectedNode
-  if (selectedNode) {
-    sampled.push(selectedNode);
-    includedIds.add(String(selectedNode.id));
-  }
-
-  // 2. TOUJOURS inclure le trail
-  for (const id of trailIds) {
-    const node = nodes.find(n => String(n.id) === id);
-    if (node && !includedIds.has(id)) {
-      sampled.push(node);
-      includedIds.add(id);
-    }
-  }
-
-  // 3. Échantillonner le reste avec hash stable
-  const threshold = TARGET_SAMPLE_SIZE / nodes.length;  // ~5%
-
-  for (const node of nodes) {
-    const id = String(node.id);
-
-    // Skip si déjà inclus
-    if (includedIds.has(id)) continue;
-
-    // Skip void stars (normaliser galaxyId en string)
-    const star = starIndex.get(id);
-    const galaxyId = star?.galaxy != null ? String(star.galaxy) : undefined;
-    if (!star || galaxyId === 'void') continue;
-
-    // Sampling stable basé sur hash du starId
-    const hash = simpleHash(id);
-    const normalized = (hash % 10000) / 10000;  // [0, 1]
-
-    if (normalized < threshold) {
-      sampled.push(node);
-      includedIds.add(id);
-    }
-  }
-
-  console.log(`[sampling] ${sampled.length} stars sampled from ${nodes.length} total`);
-  return sampled;
-}
-
-/**
- * Construit une courbe CatmullRom S → H → G avec point intermédiaire décalé
- *
- * @param starPos - Position de la star {x, y, z}
- * @param galaxyPos - Position du centre de galaxie {x, y, z}
- * @returns THREE.CatmullRomCurve3
- */
-function buildTetherCurve(
-  starPos: { x: number; y: number; z: number },
-  galaxyPos: { x: number; y: number; z: number }
-): THREE.CatmullRomCurve3 {
-  const S = new THREE.Vector3(starPos.x, starPos.y, starPos.z);
-  const G = new THREE.Vector3(galaxyPos.x, galaxyPos.y, galaxyPos.z);
-
-  // Point intermédiaire H = lerp(S, G, 0.55) + perpendicular offset
-  const H = new THREE.Vector3().lerpVectors(S, G, 0.55);
-
-  // Calculer un vecteur perpendiculaire à S→G
-  const SG = new THREE.Vector3().subVectors(G, S);
-  const distance = SG.length();
-
-  // Trouver un axe perpendiculaire (crossprod avec un vecteur arbitraire)
-  const arbitrary = new THREE.Vector3(1, 0, 0);
-  if (Math.abs(SG.dot(arbitrary)) > 0.9) {
-    arbitrary.set(0, 1, 0);  // Éviter colinéarité
-  }
-  const perp = new THREE.Vector3().crossVectors(SG, arbitrary).normalize();
-
-  // Amplitude du décalage : fonction de la distance, cappée
-  const amplitude = Math.min(Math.max(distance * 0.08, 10), 40);
-
-  // Décaler H perpendiculairement
-  H.addScaledVector(perp, amplitude);
-
-  // Courbe CatmullRom à travers S, H, G
-  return new THREE.CatmullRomCurve3([S, H, G], false, 'catmullrom', 0.5);
-}
+// ================================================
+// All utility functions have been extracted to:
+// - ./utils/idUtils.ts (idStr, linkEndId, linkIdStable)
+// - ./utils/hashUtils.ts (hashString, simpleHash)
+// - ./utils/nodeFiltering.ts (ensureIncludedNodes)
+// - ./utils/visualUtils.ts (getGalaxyColor, computeGalaxyCenterVisual, computeStarVisual)
+// - ./utils/samplingUtils.ts (sampleStarsForTethers, buildTetherCurve)
+// ================================================
 
 export default function Map3D({
   graphData,
@@ -986,28 +762,9 @@ export default function Map3D({
 
   // ================================================
   // GALAXY RESOURCES (shared geometry + material pool)
+  // Extracted to useGalaxyMaterials hook
   // ================================================
-  const galaxyGeomRef = useRef<THREE.SphereGeometry | null>(null);
-  const galaxyMatPoolRef = useRef<THREE.MeshBasicMaterial[]>([]);
-  const galaxyTempColorRef = useRef(new THREE.Color());
-
-  useEffect(() => {
-    // Shared geometry for all galaxy nodes
-    galaxyGeomRef.current = new THREE.SphereGeometry(1, 12, 12);
-
-    // Pool materials to avoid allocating per-node
-    galaxyMatPoolRef.current = Array.from({ length: GALAXY_MAT_POOL_SIZE }, () => {
-      return new THREE.MeshBasicMaterial({ transparent: true });
-    });
-
-    return () => {
-      galaxyGeomRef.current?.dispose();
-      galaxyGeomRef.current = null;
-
-      for (const m of galaxyMatPoolRef.current) m.dispose();
-      galaxyMatPoolRef.current = [];
-    };
-  }, []);
+  const { galaxyGeomRef, galaxyMatPoolRef, galaxyTempColorRef } = useGalaxyMaterials();
 
   useEffect(() => {
     const map = new Map<string, Array<{ to: string; linkId: string }>>();
