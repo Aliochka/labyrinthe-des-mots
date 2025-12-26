@@ -27,6 +27,7 @@ def main():
     ap.add_argument("--stars-pos", required=True)
     ap.add_argument("--membership", required=True)
     ap.add_argument("--bundles", required=False, help="Chemin vers galaxy_bundles.json")
+    ap.add_argument("--star-bundles", required=False, help="Chemin vers star_bundles.json")
     ap.add_argument("--out", default="universe.json")
     args = ap.parse_args()
 
@@ -87,6 +88,17 @@ def main():
             }
         }
 
+    # Ajouter star bundles si fournis
+    if args.star_bundles:
+        star_bundles_data = load_json(args.star_bundles)
+        if "bundles" not in universe:
+            universe["bundles"] = {}
+        universe["bundles"]["star"] = {
+            "backbone": star_bundles_data.get("backbone", [])
+        }
+        if "meta" in star_bundles_data:
+            universe["bundles"]["star"]["meta"] = star_bundles_data["meta"]
+
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(universe, f, ensure_ascii=False, indent=2)
 
@@ -95,7 +107,10 @@ def main():
     print(f"→ stars:    {len(stars)}")
     if args.bundles:
         bundle_count = len(universe["bundles"]["galaxy"]["routes"])
-        print(f"→ bundles:  {bundle_count} routes")
+        print(f"→ galaxy bundles: {bundle_count} routes")
+    if args.star_bundles:
+        backbone_count = len(universe["bundles"]["star"]["backbone"])
+        print(f"→ star backbone:  {backbone_count} edges")
     print(f"→ fichier:  {args.out}")
 
 

@@ -24,23 +24,21 @@ export const GamePage: React.FC = () => {
   const { graphData, isLoading: isLoadingGraph } =
     useUniverseGraph(shouldLoadGraph);
 
-  const tabs: Tab[] = [
-    {
-      id: 'navigation',
-      label: 'Navigation',
-      content: (
+  // Fonction pour générer le contenu du tab actif UNIQUEMENT
+  const getActiveContent = () => {
+    if (activeTabId === 'navigation') {
+      return (
         <Navigation
           width={window.innerWidth}
           height={window.innerHeight - 48}
           initialQuery={currentQuery}
         />
-      ),
-    },
-    {
-      id: 'map2d',
-      label: 'Map 2D',
-      content:
-        isLoadingGraph || !graphData ? (
+      );
+    }
+
+    if (activeTabId === 'map2d') {
+      if (isLoadingGraph || !graphData) {
+        return (
           <div
             style={{
               width: '100%',
@@ -52,19 +50,20 @@ export const GamePage: React.FC = () => {
           >
             Chargement de la carte 2D...
           </div>
-        ) : (
-          <Map2D
-            graphData={graphData}
-            width={window.innerWidth}
-            height={window.innerHeight - 48}
-          />
-        ),
-    },
-    {
-      id: 'map3d',
-      label: 'Map 3D',
-      content:
-        isLoadingGraph || !graphData ? (
+        );
+      }
+      return (
+        <Map2D
+          graphData={graphData}
+          width={window.innerWidth}
+          height={window.innerHeight - 48}
+        />
+      );
+    }
+
+    if (activeTabId === 'map3d') {
+      if (isLoadingGraph || !graphData) {
+        return (
           <div
             style={{
               width: '100%',
@@ -76,25 +75,35 @@ export const GamePage: React.FC = () => {
           >
             Chargement de la carte 3D...
           </div>
-        ) : (
-          <Map3D
-            graphData={graphData}
-            width={window.innerWidth}
-            height={window.innerHeight - 48}
-          />
-        ),
-    },
-    {
-      id: 'graph',
-      label: 'Exploration du graphe',
-      content: (
+        );
+      }
+      return (
+        <Map3D
+          graphData={graphData}
+          width={window.innerWidth}
+          height={window.innerHeight - 48}
+        />
+      );
+    }
+
+    if (activeTabId === 'graph') {
+      return (
         <GraphExploration
           width={window.innerWidth}
           height={window.innerHeight - 48}
           initialQuery={currentQuery}
         />
-      ),
-    },
+      );
+    }
+
+    return null;
+  };
+
+  const tabs: Tab[] = [
+    { id: 'navigation', label: 'Navigation', content: null },
+    { id: 'map2d', label: 'Map 2D', content: null },
+    { id: 'map3d', label: 'Map 3D', content: null },
+    { id: 'graph', label: 'Exploration du graphe', content: null },
   ];
 
   return (
@@ -102,6 +111,7 @@ export const GamePage: React.FC = () => {
       tabs={tabs}
       activeTabId={activeTabId}
       setActiveTabId={setActiveTabId}
+      activeContent={getActiveContent()}
     />
   );
 };

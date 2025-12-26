@@ -85,15 +85,13 @@ python3 scripts/data_pipeline/compute_positions_cosmic.py \
 
 
 ```
+- calculer les bundles pour les galaxies build_galaxy_bundles.py
+- calculer les bundles pour les étoiles build_star_backbone.py
+
 
 - créer le fichier final -> export_universe.ts
 
 ```
-python3 scripts/data_pipeline/export_universe.py \                                                         
-  --galaxies-named data/galaxies_named.json \
-  --galaxies-pos data/positions_galaxies.json \
-  --stars-pos data/positions_stars.json \
-  --membership data/galaxy_membership.jsonl \
-  --out app/public/universe.json
+python3 scripts/data_pipeline/export_universe.py ...
 
 ```

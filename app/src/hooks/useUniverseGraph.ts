@@ -171,6 +171,7 @@ function buildUniverseGraphData(
   console.log(`[buildUniverseGraphData] starIndex size: ${starIndex.size}`);
   console.log(`[buildUniverseGraphData] Test a_la_fois:`, starIndex.get('a_la_fois'));
   console.log(`[buildUniverseGraphData] starNodes: ${starNodes.length}, galaxyNodes: ${galaxyNodes.length}`);
+  console.log(`[buildUniverseGraphData] star backbone: ${universe.bundles?.star?.backbone?.length ?? 0} edges`);
 
   return {
     galaxies: {

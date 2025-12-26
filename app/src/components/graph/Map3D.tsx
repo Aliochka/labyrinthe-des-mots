@@ -11,7 +11,6 @@ import * as THREE from "three";
 import { ControlPanel } from "../ui/ControlPanel";
 import { RelationFilter } from "../ui/RelationFilter";
 import { useAppStore } from "../../store/appStore";
-import { filterGraphLinks } from "../../utils/linkFilters";
 import { useLODSystem } from "../../hooks/useLODSystem";
 import type {
   UniverseGraphData,
@@ -29,16 +28,15 @@ interface Props {
   backgroundColor?: string;
 }
 
-// Limites de rendu
+// Limites de rendu (réduit pour éviter WebGL context lost)
 const MAX_NODES_RENDER = 20000;
-const MAX_STAR_LINKS_RENDER = 10000;
 
 // Pool matériaux galaxies (évite leak GPU)
 const GALAXY_MAT_POOL_SIZE = 64;
 
 // Debug helpers (à false en prod)
 const DEBUG_PANEL = true;
-const SHOW_BOUNDING_BOX_HELPER = true;
+const SHOW_BOUNDING_BOX_HELPER = false;
 
 function idStr(v: any) {
   return String(v ?? "");
@@ -96,13 +94,46 @@ function ensureIncludedNodes(
   return out;
 }
 
-function computeStarVisual(node: any, isSelected: boolean) {
+/**
+ * Génère une couleur unique et stable pour chaque galaxie
+ * Distribue les teintes uniformément sur le cercle chromatique
+ */
+function getGalaxyColor(galaxyId: string): THREE.Color {
+  // Extraire le numéro de la galaxie (ex: "gc_0" -> 0)
+  const match = galaxyId.match(/\d+/);
+  const num = match ? parseInt(match[0]) : 0;
+
+  // Distribuer les teintes sur 360° pour 46 galaxies
+  const hue = (num * 137.5) % 360 / 360;  // 137.5° = golden angle pour meilleure distribution
+  const saturation = 0.85;  // Couleurs vives
+  const lightness = 0.55;   // Ni trop sombre, ni trop clair
+
+  const color = new THREE.Color();
+  color.setHSL(hue, saturation, lightness);
+  return color;
+}
+
+function computeGalaxyCenterVisual(node: any) {
+  // Centres de galaxies : plus gros, couleur de leur galaxie
+  const radius = 3.0;  // Beaucoup plus gros que les stars
+  const color = getGalaxyColor(node.id);  // Couleur unique par galaxie
+  const opacity = 0.95;  // Très visible
+  return { radius, color, opacity };
+}
+
+function computeStarVisual(node: any, isSelected: boolean, galaxyId?: string) {
+  // Si c'est un centre de galaxie
+  if (node.__isGalaxyCenter) {
+    return computeGalaxyCenterVisual(node);
+  }
+
+  // Calculer densité/intensité pour le rayon
   const d = node.density ?? 0;
   const deg = node.degree ?? 0;
   const intensityFromDeg = Math.min(1, Math.log10(deg + 2) / 2);
   const density = d > 0 ? d : intensityFromDeg;
 
-  const levelScale = 1.6; // star level
+  const levelScale = 0.4; // star level (réduit pour des étoiles plus petites)
   const baseR = 0.7 * levelScale;
   const intensity = 0.35 + 0.65 * density;
 
@@ -111,11 +142,131 @@ function computeStarVisual(node: any, isSelected: boolean) {
     : baseR + intensity * 1.1;
 
   const color = new THREE.Color();
-  if (isSelected) color.set(0x4ecdc4);
-  else color.setHSL(0.78 - 0.3 * intensity, 1, 0.45 + 0.3 * intensity);
+  if (isSelected) {
+    color.set(0x4ecdc4);  // Cyan pour sélection
+  } else if (galaxyId !== undefined && galaxyId !== 'void') {
+    // Couleur unique par galaxie (normalisée en string)
+    color.copy(getGalaxyColor(galaxyId));
+  } else {
+    // Couleur par densité pour les nœuds isolés (void)
+    color.setHSL(0.78 - 0.3 * intensity, 1, 0.45 + 0.3 * intensity);
+  }
 
   const opacity = isSelected ? 1.0 : 0.55 + 0.45 * intensity;
   return { radius, color, opacity };
+}
+
+/**
+ * Hash simple et stable pour un string (Java hashCode)
+ */
+function simpleHash(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;  // Convert to 32bit integer
+  }
+  return Math.abs(hash);
+}
+
+/**
+ * Échantillonne les stars pour les tethers avec sampling stable
+ *
+ * @param nodes - Tous les nœuds actuellement affichés
+ * @param selectedNode - Nœud sélectionné (toujours inclus)
+ * @param trailIds - IDs du trail (toujours inclus)
+ * @param starIndex - Index starId → StarNode pour vérifier galaxy
+ * @returns Liste des stars à afficher comme tethers
+ */
+function sampleStarsForTethers(
+  nodes: GraphNode[],
+  selectedNode: GraphNode | null,
+  trailIds: string[],
+  starIndex: Map<string, any>
+): GraphNode[] {
+  const TARGET_SAMPLE_SIZE = 1500;  // Viser ~1500 tethers (5% de 66k)
+  const sampled: GraphNode[] = [];
+  const includedIds = new Set<string>();
+
+  // 1. TOUJOURS inclure selectedNode
+  if (selectedNode) {
+    sampled.push(selectedNode);
+    includedIds.add(String(selectedNode.id));
+  }
+
+  // 2. TOUJOURS inclure le trail
+  for (const id of trailIds) {
+    const node = nodes.find(n => String(n.id) === id);
+    if (node && !includedIds.has(id)) {
+      sampled.push(node);
+      includedIds.add(id);
+    }
+  }
+
+  // 3. Échantillonner le reste avec hash stable
+  const threshold = TARGET_SAMPLE_SIZE / nodes.length;  // ~5%
+
+  for (const node of nodes) {
+    const id = String(node.id);
+
+    // Skip si déjà inclus
+    if (includedIds.has(id)) continue;
+
+    // Skip void stars (normaliser galaxyId en string)
+    const star = starIndex.get(id);
+    const galaxyId = star?.galaxy != null ? String(star.galaxy) : undefined;
+    if (!star || galaxyId === 'void') continue;
+
+    // Sampling stable basé sur hash du starId
+    const hash = simpleHash(id);
+    const normalized = (hash % 10000) / 10000;  // [0, 1]
+
+    if (normalized < threshold) {
+      sampled.push(node);
+      includedIds.add(id);
+    }
+  }
+
+  console.log(`[sampling] ${sampled.length} stars sampled from ${nodes.length} total`);
+  return sampled;
+}
+
+/**
+ * Construit une courbe CatmullRom S → H → G avec point intermédiaire décalé
+ *
+ * @param starPos - Position de la star {x, y, z}
+ * @param galaxyPos - Position du centre de galaxie {x, y, z}
+ * @returns THREE.CatmullRomCurve3
+ */
+function buildTetherCurve(
+  starPos: { x: number; y: number; z: number },
+  galaxyPos: { x: number; y: number; z: number }
+): THREE.CatmullRomCurve3 {
+  const S = new THREE.Vector3(starPos.x, starPos.y, starPos.z);
+  const G = new THREE.Vector3(galaxyPos.x, galaxyPos.y, galaxyPos.z);
+
+  // Point intermédiaire H = lerp(S, G, 0.55) + perpendicular offset
+  const H = new THREE.Vector3().lerpVectors(S, G, 0.55);
+
+  // Calculer un vecteur perpendiculaire à S→G
+  const SG = new THREE.Vector3().subVectors(G, S);
+  const distance = SG.length();
+
+  // Trouver un axe perpendiculaire (crossprod avec un vecteur arbitraire)
+  const arbitrary = new THREE.Vector3(1, 0, 0);
+  if (Math.abs(SG.dot(arbitrary)) > 0.9) {
+    arbitrary.set(0, 1, 0);  // Éviter colinéarité
+  }
+  const perp = new THREE.Vector3().crossVectors(SG, arbitrary).normalize();
+
+  // Amplitude du décalage : fonction de la distance, cappée
+  const amplitude = Math.min(Math.max(distance * 0.08, 10), 40);
+
+  // Décaler H perpendiculairement
+  H.addScaledVector(perp, amplitude);
+
+  // Courbe CatmullRom à travers S, H, G
+  return new THREE.CatmullRomCurve3([S, H, G], false, 'catmullrom', 0.5);
 }
 
 export default function Map3D({
@@ -125,6 +276,15 @@ export default function Map3D({
   backgroundColor = "#050010",
 }: Props) {
   const fgRef = useRef<any>(null);
+  const cameraInitializedRef = useRef(false);  // Track si caméra déjà positionnée
+  const savedCameraState = useRef<{ pos: THREE.Vector3, lookAt: THREE.Vector3 } | null>(null);
+
+  // Debug: compter les re-renders
+  const renderCountRef = useRef(0);
+  renderCountRef.current++;
+  if (renderCountRef.current <= 5) {
+    console.log(`[Map3D] Render #${renderCountRef.current}, graphData=${!!graphData}`);
+  }
 
   // ================================================
   // Exploration tracking and path visualization
@@ -186,9 +346,10 @@ export default function Map3D({
     cameraDistance,
   });
 
-  // Quand linksOnly, on force l’état stable côté rendu stars (évite bascules)
+  // Forcer InstancedMesh en mode star pour la coloration par galaxie
+  // (sinon le pool de materials partagés écrase les couleurs)
   const effectiveRenderMode =
-    currentLevelId === "star" && linksOnly ? "stars" : renderMode;
+    currentLevelId === "star" ? "stars" : renderMode;
 
   const inStarsRenderMode =
     currentLevelId === "star" && effectiveRenderMode === "stars";
@@ -198,8 +359,27 @@ export default function Map3D({
   // ================================================
   const rawData: GraphData | null = useMemo(() => {
     if (!levels.length) return null;
-    return levels[levelIdx].data;
-  }, [levels, levelIdx]);
+
+    if (currentLevelId === "galaxy") {
+      return levels[levelIdx].data;
+    }
+
+    // MODE STAR : inclure les centres de galaxies comme nœuds spéciaux
+    const starData = levels[levelIdx].data;
+    const galaxyData = graphData?.galaxies;
+    if (!galaxyData) return starData;
+
+    const starNodes = [...(starData.nodes ?? [])];
+    const galaxyCenters = galaxyData.nodes.map(g => ({
+      ...g,
+      __isGalaxyCenter: true  // Marqueur pour styling
+    }));
+
+    return {
+      nodes: [...starNodes, ...galaxyCenters],
+      links: starData.links ?? []
+    };
+  }, [levels, levelIdx, currentLevelId, graphData]);
 
   // ================================================
   // Must-include ids (selected + trail)
@@ -225,12 +405,19 @@ export default function Map3D({
 
     // Downsampling global si trop de stars
     if (currentLevelId === "star" && nodes.length > MAX_NODES_RENDER) {
-      const step = Math.ceil(nodes.length / MAX_NODES_RENDER);
-      let sampled = nodes.filter((_, i) => i % step === 0);
+      // Séparer les centres de galaxies des stars
+      const galaxyCenters = nodes.filter((n: any) => n.__isGalaxyCenter);
+      const stars = nodes.filter((n: any) => !n.__isGalaxyCenter);
+
+      const step = Math.ceil(stars.length / MAX_NODES_RENDER);
+      let sampledStars = stars.filter((_, i) => i % step === 0);
 
       // Garder sélection + trail même si hors sampling
-      sampled = ensureIncludedNodes(sampled, nodes, mustIncludeIds);
-      nodes = sampled;
+      sampledStars = ensureIncludedNodes(sampledStars, stars, mustIncludeIds);
+
+      // TOUJOURS inclure TOUS les centres de galaxies (46 nodes)
+      nodes = [...sampledStars, ...galaxyCenters];
+      console.log(`[displayData] ${sampledStars.length} stars + ${galaxyCenters.length} galaxy centers`);
     } else {
       nodes = ensureIncludedNodes(nodes, rawNodes, mustIncludeIds);
     }
@@ -246,19 +433,15 @@ export default function Map3D({
 
 
     if (currentLevelId === "star") {
-      // Filtrer par type de relation D'ABORD (toujours appliqué, même si liens cachés ensuite par LOD)
-      filteredLinks = filterGraphLinks(filteredLinks, enabledRelationTypes);
+      // Ne plus afficher les liens globaux par défaut
+      // Les star-tethers remplaceront cette visualisation
+      filteredLinks = [];
 
-      const forceLinks = linksOnly; // ✅ override utilisateur
-      if (shouldShowStarLinks || forceLinks) {
-        // Downsampling pour performance si trop de liens
-        if (filteredLinks.length > MAX_STAR_LINKS_RENDER) {
-          const step = Math.ceil(filteredLinks.length / MAX_STAR_LINKS_RENDER);
-          filteredLinks = filteredLinks.filter((_, i) => i % step === 0);
-        }
-      } else {
-        filteredLinks = [];
-      }
+      // TODO plus tard : ego-graph autour de selectedNode
+      // if (selectedNode) {
+      //   const egoLinks = getEgoGraphLinks(selectedNode.id, topK=20);
+      //   filteredLinks = egoLinks;
+      // }
     }
     // --- ensure stable id on links ---
     filteredLinks = filteredLinks.map((l: any) => {
@@ -434,6 +617,180 @@ export default function Map3D({
     };
   }, [currentLevelId, galaxyBundles, linksOnly]);
 
+  // ================================================
+  // LAYER: STAR TETHERS (courbes star → centre galaxie)
+  // ================================================
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    const scene: THREE.Scene = fg.scene();
+
+    // Nettoyage de l'ancienne couche
+    const existing = scene.getObjectByName("star-tethers");
+    if (existing) {
+      scene.remove(existing);
+      existing.traverse((obj: any) => {
+        if (obj.geometry) obj.geometry.dispose?.();
+        if (obj.material) obj.material.dispose?.();
+      });
+    }
+
+    // Tethers uniquement en mode star ET quand "Afficher les liens" est activé
+    if (currentLevelId !== "star") return;
+    if (!linksOnly) return;  // Seulement si l'utilisateur active les liens
+    if (!graphData) return;
+
+    // Échantillonner les stars à afficher
+    const sampledStars = sampleStarsForTethers(
+      displayData.nodes,
+      selectedNode,
+      visibleNavigationNodeIds,
+      graphData.starIndex
+    );
+
+    console.log(`[star-tethers] Rendering ${sampledStars.length} tethers`);
+
+    // Créer le groupe Three.js
+    const group = new THREE.Group();
+    group.name = "star-tethers";
+
+    const material = new THREE.LineBasicMaterial({
+      color: 0x666666,  // Gris neutre
+      transparent: true,
+      opacity: 0.2,     // Très transparent pour ne pas surcharger
+    });
+
+    // Pour chaque star échantillonnée
+    for (const starNode of sampledStars) {
+      // Récupérer le centre de la galaxie (normaliser galaxyId en string)
+      const star = graphData.starIndex.get(starNode.id as string);
+      const galaxyId = star?.galaxy != null ? String(star.galaxy) : undefined;
+      if (!star || galaxyId === 'void') continue;  // Skip void stars
+
+      const galaxyNode = graphData.galaxies.nodes.find(g => g.id === galaxyId);
+      if (!galaxyNode || galaxyNode.x == null || galaxyNode.y == null || galaxyNode.z == null) continue;
+
+      // Construire la courbe S → H → G
+      const curve = buildTetherCurve(
+        { x: starNode.x!, y: starNode.y!, z: starNode.z! },  // S = star
+        { x: galaxyNode.x, y: galaxyNode.y, z: galaxyNode.z }  // G = galaxy center
+      );
+
+      // Géométrie de la courbe
+      const points = curve.getPoints(16);  // 16 points pour lisser
+      const geometry = new THREE.BufferGeometry().setFromPoints(points);
+      const line = new THREE.Line(geometry, material);
+
+      group.add(line);
+    }
+
+    scene.add(group);
+
+    return () => {
+      // Cleanup au démontage
+      scene.remove(group);
+      group.traverse((obj: any) => {
+        if (obj.geometry) obj.geometry.dispose?.();
+        if (obj.material) obj.material.dispose?.();
+      });
+    };
+  }, [currentLevelId, linksOnly, displayData.nodes, selectedNode, visibleNavigationNodeIds, graphData]);
+
+  // ================================================
+  // LAYER: STAR BACKBONE (MST + kNN hybride)
+  // ================================================
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    const scene: THREE.Scene = fg.scene();
+
+    // Nettoyage de l'ancienne couche
+    const existing = scene.getObjectByName("star-backbone");
+    if (existing) {
+      scene.remove(existing);
+      existing.traverse((obj: any) => {
+        if (obj.geometry) obj.geometry.dispose?.();
+        if (obj.material) obj.material.dispose?.();
+      });
+    }
+
+    // Backbone uniquement en mode star ET quand "Afficher les liens" est activé
+    if (currentLevelId !== "star") return;
+    if (!linksOnly) return;  // Seulement si l'utilisateur active les liens
+    if (!graphData?.bundles?.star?.backbone) return;
+
+    const backbone = graphData.bundles.star.backbone;
+    console.log(`[star-backbone] Rendering ${backbone.length} edges`);
+
+    // Créer le groupe Three.js
+    const group = new THREE.Group();
+    group.name = "star-backbone";
+
+    // Material avec LOD-awareness via opacité
+    const material = new THREE.LineBasicMaterial({
+      color: 0x4488ff,  // Bleu clair
+      transparent: true,
+      opacity: 0.15,    // Très transparent par défaut
+    });
+
+    // Pour chaque arête du backbone
+    for (const edge of backbone) {
+      if (!edge.points || edge.points.length < 2) continue;
+
+      // Ligne droite entre les 2 points
+      const p1 = new THREE.Vector3(edge.points[0][0], edge.points[0][1], edge.points[0][2]);
+      const p2 = new THREE.Vector3(edge.points[1][0], edge.points[1][1], edge.points[1][2]);
+
+      const geometry = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+      const line = new THREE.Line(geometry, material);
+
+      group.add(line);
+    }
+
+    scene.add(group);
+
+    return () => {
+      // Cleanup au démontage
+      scene.remove(group);
+      group.traverse((obj: any) => {
+        if (obj.geometry) obj.geometry.dispose?.();
+        if (obj.material) obj.material.dispose?.();
+      });
+    };
+  }, [currentLevelId, linksOnly, graphData]);
+
+  // ================================================
+  // WEBGL CONTEXT LOST RECOVERY
+  // ================================================
+  const [contextLostCount, setContextLostCount] = useState(0);
+
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg) return;
+
+    const renderer = fg.renderer?.();
+    const canvas: HTMLCanvasElement | null = renderer?.domElement ?? null;
+    if (!canvas) return;
+
+    const handleContextLost = (event: Event) => {
+      event.preventDefault();
+      console.warn('[Map3D] WebGL context lost, preventing default...');
+    };
+
+    const handleContextRestored = () => {
+      console.log('[Map3D] WebGL context restored! Forcing re-render...');
+      // Force un re-render des couleurs
+      setContextLostCount(prev => prev + 1);
+    };
+
+    canvas.addEventListener('webglcontextlost', handleContextLost);
+    canvas.addEventListener('webglcontextrestored', handleContextRestored);
+
+    return () => {
+      canvas.removeEventListener('webglcontextlost', handleContextLost);
+      canvas.removeEventListener('webglcontextrestored', handleContextRestored);
+    };
+  }, []);
 
   // ================================================
   // FADE-IN DOUX AU DÉMARRAGE
@@ -462,9 +819,10 @@ export default function Map3D({
     const r = fg?.renderer?.();
     if (!r) return;
 
-    // pendant debug: très conservateur
-    const cap = currentLevelId === "star" ? 1 : 1.5;
-    r.setPixelRatio(Math.min(window.devicePixelRatio ?? 1, cap));
+    // Forcer pixelRatio=1 pour éviter WebGL context lost
+    const cap = 1;  // Très conservateur
+    r.setPixelRatio(cap);
+    console.log(`[PixelRatio] Set to ${cap}, devicePixelRatio=${window.devicePixelRatio}`);
   }, [currentLevelId]);
 
   // ================================================
@@ -476,6 +834,8 @@ export default function Map3D({
 
     const nodes = displayData.nodes;
     if (!nodes.length) return;
+
+    console.log(`[camera useEffect] currentLevelId=${currentLevelId}, initialized=${cameraInitializedRef.current}, nodes=${nodes.length}`);
 
     const scene: THREE.Scene = fg.scene();
 
@@ -536,18 +896,70 @@ export default function Map3D({
       scene.add(helper);
     }
 
-    const levelDistanceFactor =
-      currentLevelId === "galaxy" ? 5.0 : currentLevelId === "star" ? 3.5 : 2.8;
+    // Positionner la caméra UNIQUEMENT lors de la première initialisation
+    // Après ça, ne JAMAIS toucher la caméra (l'utilisateur garde le contrôle total)
+    if (!cameraInitializedRef.current) {
+      const levelDistanceFactor =
+        currentLevelId === "galaxy" ? 5.0 : currentLevelId === "star" ? 3.5 : 2.8;
 
-    const dist = rm * levelDistanceFactor;
-    const camPos = new THREE.Vector3(c.x + dist, c.y + dist * 0.4, c.z + dist);
+      const dist = rm * levelDistanceFactor;
+      const camPos = new THREE.Vector3(c.x + dist, c.y + dist * 0.4, c.z + dist);
 
-    fg.cameraPosition(camPos, c, 0);
+      fg.cameraPosition(camPos, c, 0);
+      cameraInitializedRef.current = true;
+      console.log('[camera useEffect] Initial camera position set:', camPos);
+    }
+    // else: Ne rien faire - laisser l'utilisateur contrôler la caméra
 
     return () => {
       if (helper) scene.remove(helper);
     };
-  }, [displayData.nodes, currentLevelId]);
+  }, [displayData.nodes, currentLevelId]); // currentLevelId nécessaire pour sauvegarder/restaurer caméra
+
+  // ================================================
+  // FORCER LA CAMÉRA À RESTER EN PLACE lors du changement de niveau
+  // ForceGraph3D ajuste automatiquement le zoom selon le nombre de nodes,
+  // on doit contrer ce comportement
+  // ================================================
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg || !cameraInitializedRef.current || !savedCameraState.current) return;
+
+    // Utiliser requestAnimationFrame pour s'exécuter APRÈS le rendu de ForceGraph3D
+    const rafId = requestAnimationFrame(() => {
+      if (savedCameraState.current) {
+        console.log('[force camera] Forcing camera to saved position');
+        fg.cameraPosition(
+          savedCameraState.current.pos,
+          savedCameraState.current.lookAt,
+          0
+        );
+      }
+    });
+
+    return () => cancelAnimationFrame(rafId);
+  }, [currentLevelId]); // Se déclenche à chaque changement de niveau
+
+  // ================================================
+  // SAUVEGARDER la position caméra quand l'utilisateur la change
+  // ================================================
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg || !cameraInitializedRef.current) return;
+
+    const intervalId = setInterval(() => {
+      const camera = fg.camera();
+      const controls = fg.controls();
+      if (camera && controls) {
+        savedCameraState.current = {
+          pos: camera.position.clone(),
+          lookAt: controls.target.clone()
+        };
+      }
+    }, 500); // Sauvegarder toutes les 500ms
+
+    return () => clearInterval(intervalId);
+  }, []); // Une seule fois
 
   // ================================================
   // TRACK CAMERA DISTANCE (throttle 500ms)
@@ -639,21 +1051,39 @@ export default function Map3D({
     if (!inStarsRenderMode) return;
 
     const stars = starsSourceRef.current;
+    console.log(`[updateStarInstances] Updating ${stars.length} instances, graphData=${!!graphData}`);
 
     const tempObj = new THREE.Object3D();
     const tempCol = new THREE.Color();
+
+    let galaxyCenterCount = 0;
+    let coloredStarCount = 0;
 
     for (let i = 0; i < stars.length; i++) {
       const node: any = stars[i];
       const isSelected = selectedNode?.id === node.id;
 
-      const { radius, color, opacity } = computeStarVisual(node, isSelected);
+      // Détecter galaxy centers
+      if (node.__isGalaxyCenter) {
+        galaxyCenterCount++;
+      }
+
+      // Récupérer le galaxyId via starIndex et normaliser en string
+      const star = graphData?.starIndex.get(String(node.id));
+      const galaxyId = star?.galaxy != null ? String(star.galaxy) : undefined;
+
+      if (galaxyId && galaxyId !== 'void') {
+        coloredStarCount++;
+      }
+
+      const { radius, color, opacity } = computeStarVisual(node, isSelected, galaxyId);
 
       tempObj.position.set(node.x ?? 0, node.y ?? 0, node.z ?? 0);
       tempObj.scale.setScalar(radius);
       tempObj.updateMatrix();
       mesh.setMatrixAt(i, tempObj.matrix);
 
+      // Appliquer l'opacity à la couleur pour moins d'agressivité
       tempCol.copy(color).multiplyScalar(opacity);
       mesh.setColorAt(i, tempCol);
     }
@@ -661,7 +1091,9 @@ export default function Map3D({
     mesh.count = stars.length;
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [inStarsRenderMode, selectedNode]);
+
+    console.log(`[updateStarInstances] Done: ${galaxyCenterCount} centers, ${coloredStarCount} colored stars`);
+  }, [inStarsRenderMode, selectedNode, graphData]);
 
   // Create/destroy instanced mesh on mode changes
   useEffect(() => {
@@ -695,18 +1127,33 @@ export default function Map3D({
 
     const geometry = new THREE.SphereGeometry(1, 10, 10);
     const material = new THREE.MeshBasicMaterial({
-      vertexColors: true,
       transparent: true,
+      opacity: 1,
     });
-
     const capacity = Math.max(1, displayData.nodes.length);
     const mesh = new THREE.InstancedMesh(geometry, material, capacity);
+    mesh.frustumCulled = false;
+    mesh.instanceColor = new THREE.InstancedBufferAttribute(
+      new Float32Array(capacity * 3),
+      3
+    );
+    mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+
+    // force shader variant instancingColor
+    material.needsUpdate = true;
+
     mesh.name = "instanced-stars";
     scene.add(mesh);
+    (mesh.material as THREE.MeshBasicMaterial).color.set(0xffffff);
 
+
+    starsMeshRef.current = mesh;
     starsGeomRef.current = geometry;
     starsMatRef.current = material;
-    starsMeshRef.current = mesh;
+    console.log("has instanceColor", !!starsMeshRef.current?.instanceColor);
+    console.log("material.vertexColors", (starsMatRef.current as any)?.vertexColors);
+
+    requestAnimationFrame(() => updateStarInstances());
 
     // Picking: attach to canvas
     const renderer = fg.renderer?.();
@@ -756,24 +1203,34 @@ export default function Map3D({
     const scene: THREE.Scene | null = fg?.scene?.() ?? null;
     const mesh = starsMeshRef.current;
 
-    if (scene && mesh && mesh.instanceMatrix.count < starsSourceRef.current.length) {
+    if (scene && mesh && mesh.count < starsSourceRef.current.length) {
       scene.remove(mesh);
-
-      // dispose old mesh only (geometry/material are refs)
-      // mesh.dispose() isn't always present; remove is enough if we dispose geom/mat separately
+      const capacity = Math.max(1, displayData.nodes.length);
+      console.log('[mesh resize] capacity:', capacity, 'starsSource:', starsSourceRef.current.length);
       const geometry = starsGeomRef.current ?? new THREE.SphereGeometry(1, 10, 10);
       const material =
         starsMatRef.current ??
-        new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true });
+        new THREE.MeshBasicMaterial({ transparent: true });
 
       const newMesh = new THREE.InstancedMesh(
         geometry,
         material,
-        Math.max(1, starsSourceRef.current.length)
+        capacity
       );
+      newMesh.instanceColor = new THREE.InstancedBufferAttribute(
+        new Float32Array(capacity * 3),
+        3
+      );
+      newMesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+
+      material.needsUpdate = true;
+
       newMesh.name = "instanced-stars";
       scene.add(newMesh);
       starsMeshRef.current = newMesh;
+      console.log("has instanceColor", !!starsMeshRef.current?.instanceColor);
+      console.log("material.vertexColors", (starsMatRef.current as any)?.vertexColors);
+
     }
 
     updateStarInstances();
@@ -784,6 +1241,13 @@ export default function Map3D({
     if (!inStarsRenderMode) return;
     updateStarInstances();
   }, [selectedNode, inStarsRenderMode, updateStarInstances]);
+
+  // Force re-render après restauration du contexte WebGL
+  useEffect(() => {
+    if (contextLostCount === 0) return;
+    console.log('[Map3D] Re-rendering after context restore');
+    updateStarInstances();
+  }, [contextLostCount, updateStarInstances]);
 
   // ================================================
   // NODE OBJECT (galaxies) — GPU safe
@@ -814,8 +1278,26 @@ export default function Map3D({
       : baseR + intensity * 1.1;
 
     const color = galaxyTempColorRef.current;
-    if (isSelected) color.set(0x4ecdc4);
-    else color.setHSL(0.78 - 0.3 * intensity, 1, 0.45 + 0.3 * intensity);
+    if (isSelected) {
+      color.set(0x4ecdc4);
+    } else if (currentLevelId === "galaxy") {
+      // Niveau galaxy : couleur unique par galaxie
+      color.copy(getGalaxyColor(String(node.id)));
+    } else if (currentLevelId === "star") {
+      // Niveau star (mais LOD désactive InstancedMesh) : couleur par galaxie
+      const star = graphData?.starIndex.get(String(node.id));
+      const galaxyId = star?.galaxy != null ? String(star.galaxy) : undefined;
+
+      if (galaxyId !== undefined && galaxyId !== 'void') {
+        color.copy(getGalaxyColor(galaxyId));
+      } else {
+        // Stars void : couleur par densité
+        color.setHSL(0.78 - 0.3 * intensity, 1, 0.45 + 0.3 * intensity);
+      }
+    } else {
+      // Autres niveaux : couleur par densité
+      color.setHSL(0.78 - 0.3 * intensity, 1, 0.45 + 0.3 * intensity);
+    }
 
     const opacity = isSelected ? 1.0 : 0.55 + 0.45 * intensity;
 

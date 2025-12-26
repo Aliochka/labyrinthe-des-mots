@@ -11,14 +11,18 @@ interface PageLayoutProps {
   tabs: Tab[];
   activeTabId: string;
   setActiveTabId: (id: string) => void;
+  activeContent?: ReactNode;  // Contenu actif fourni par le parent
 }
 
 export const PageLayout: React.FC<PageLayoutProps> = ({
   tabs,
   activeTabId,
   setActiveTabId,
+  activeContent,
 }) => {
   const activeTab = tabs.find((t) => t.id === activeTabId);
+  // Utiliser activeContent si fourni, sinon fallback sur activeTab.content
+  const content = activeContent !== undefined ? activeContent : activeTab?.content;
 
   return (
     <div
@@ -70,7 +74,7 @@ export const PageLayout: React.FC<PageLayoutProps> = ({
 
       {/* Contenu */}
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-        {activeTab?.content}
+        {content}
       </div>
     </div>
   );

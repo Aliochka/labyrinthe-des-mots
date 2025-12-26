@@ -123,6 +123,14 @@ export interface GalaxyBundleRoute {
   points: number[][];  // Array de [x, y, z]
 }
 
+export interface StarBackboneEdge {
+  a: string;                    // lemme source (ex: "vie")
+  b: string;                    // lemme cible (ex: "vivre")
+  weight: number;               // distance 3D
+  galaxyId: string;             // galaxie contenant cette arête
+  points: number[][];           // [[x,y,z], [x,y,z]] (2 points: début et fin)
+}
+
 export interface UniverseData {
   meta: {
     galaxies: number;
@@ -133,6 +141,21 @@ export interface UniverseData {
   bundles?: {                        // Optionnel pour rétrocompat
     galaxy?: {
       routes: GalaxyBundleRoute[];
+    };
+    star?: {
+      backbone: StarBackboneEdge[];
+      meta?: {
+        totalEdges: number;
+        galaxyCount: number;
+        targetStarsPer1k: number;
+        kNeighbors: number;
+        minDistance: number;
+        statsByGalaxy: Record<string, {
+          totalStars: number;
+          selectedStars: number;
+          backboneEdges: number;
+        }>;
+      };
     };
   };
 }
@@ -150,6 +173,9 @@ export interface UniverseGraphData {
   bundles?: {
     galaxy?: {
       routes: GalaxyBundleRoute[];
+    };
+    star?: {
+      backbone: StarBackboneEdge[];
     };
   };
   // Performance indexes
