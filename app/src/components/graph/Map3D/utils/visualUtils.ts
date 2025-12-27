@@ -42,13 +42,14 @@ export function getGalaxyColor(galaxyId: string): THREE.Color {
 /**
  * Computes visual properties for galaxy center nodes
  * @param node - Graph node representing a galaxy center
+ * @param showGalaxies - Whether galaxies should be fully visible or dimmed
  * @returns Visual properties with large radius and galaxy-specific color
  */
-export function computeGalaxyCenterVisual(node: any): NodeVisual {
+export function computeGalaxyCenterVisual(node: any, showGalaxies: boolean = true): NodeVisual {
   // Centres de galaxies : plus gros, couleur de leur galaxie
   const radius = GALAXY_CENTER_RADIUS;  // Beaucoup plus gros que les stars
-  const color = getGalaxyColor(node.id);  // Couleur unique par galaxie
-  const opacity = GALAXY_CENTER_OPACITY;  // Très visible
+  const color = showGalaxies ? getGalaxyColor(node.id) : new THREE.Color(0x111111);  // Gris très sombre si masquées
+  const opacity = showGalaxies ? GALAXY_CENTER_OPACITY : 0.08;  // Très transparent si masquées
   return { radius, color, opacity };
 }
 
@@ -58,16 +59,20 @@ export function computeGalaxyCenterVisual(node: any): NodeVisual {
  * @param node - Graph node (can be galaxy center or star)
  * @param isSelected - Whether this node is currently selected
  * @param galaxyId - Optional galaxy ID for coloring stars by their galaxy
+ * @param showStars - Whether stars should be fully visible or dimmed
+ * @param showGalaxies - Whether galaxy centers should be fully visible or dimmed
  * @returns Visual properties with appropriate radius, color, and opacity
  */
 export function computeStarVisual(
   node: any,
   isSelected: boolean,
-  galaxyId?: string
+  galaxyId?: string,
+  showStars: boolean = true,
+  showGalaxies: boolean = true
 ): NodeVisual {
   // Si c'est un centre de galaxie
   if (node.__isGalaxyCenter) {
-    return computeGalaxyCenterVisual(node);
+    return computeGalaxyCenterVisual(node, showGalaxies);
   }
 
   // Calculer densité/intensité pour le rayon
@@ -86,6 +91,9 @@ export function computeStarVisual(
   const color = new THREE.Color();
   if (isSelected) {
     color.set(SELECTION_COLOR);  // Cyan pour sélection
+  } else if (!showStars) {
+    // Étoiles masquées : gris très sombre
+    color.set(0x111111);
   } else if (galaxyId !== undefined && galaxyId !== 'void') {
     // Couleur unique par galaxie (normalisée en string)
     color.copy(getGalaxyColor(galaxyId));
@@ -94,6 +102,6 @@ export function computeStarVisual(
     color.setHSL(0.78 - 0.3 * intensity, 1, 0.45 + 0.3 * intensity);
   }
 
-  const opacity = isSelected ? 1.0 : 0.55 + 0.45 * intensity;
+  const opacity = isSelected ? 1.0 : showStars ? (0.55 + 0.45 * intensity) : 0.08;
   return { radius, color, opacity };
 }

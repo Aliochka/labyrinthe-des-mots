@@ -17,7 +17,6 @@ import type {
   GraphData,
   GraphNode,
   GraphLink,
-  LevelId,
 } from "../../../types/graph";
 import { galaxyDataService } from "../../../services/GalaxyDataService";
 // Utils and constants
@@ -28,6 +27,8 @@ import { getGalaxyColor, computeStarVisual } from "./utils/visualUtils";
 import { sampleStarsForTethers, buildTetherCurve } from "./utils/samplingUtils";
 import { useGalaxyMaterials } from "./hooks/useGalaxyMaterials";
 import { MAX_NODES_RENDER, DEBUG_PANEL, SHOW_BOUNDING_BOX_HELPER } from "./constants";
+import { filterGraphLinks } from "../../../utils/linkFilters";
+import { normalizeRelationType } from "../../../constants/relationTypes";
 
 interface Props {
   graphData: UniverseGraphData | null;
@@ -53,7 +54,6 @@ export default function Map3D({
 }: Props) {
   const fgRef = useRef<any>(null);
   const cameraInitializedRef = useRef(false);  // Track si caméra déjà positionnée
-  const savedCameraState = useRef<{ pos: THREE.Vector3, lookAt: THREE.Vector3 } | null>(null);
 
   // Debug: compter les re-renders
   const renderCountRef = useRef(0);
@@ -92,18 +92,11 @@ export default function Map3D({
 
 
   // ================================================
-  // NIVEAUX
+  // STATE
   // ================================================
-  const levels = useMemo(() => {
-    if (!graphData) return [];
-    return [
-      { id: "galaxy" as LevelId, data: graphData.galaxies },
-      { id: "star" as LevelId, data: graphData.stars },
-    ];
-  }, [graphData]);
-
-  const [levelIdx, setLevelIdx] = useState(0);
   const [linksOnly, setLinksOnly] = useState(false);
+  const [showStars, setShowStars] = useState(true);
+  const [showGalaxies, setShowGalaxies] = useState(true);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [center, setCenter] = useState(new THREE.Vector3(0, 0, 0));
   const [cameraDistance, setCameraDistance] = useState(Infinity);
@@ -111,8 +104,6 @@ export default function Map3D({
 
   const neighborsRef = useRef<Map<string, Array<{ to: string; linkId: string }>>>(new Map());
   const degreeRef = useRef<Map<string, number>>(new Map());
-
-  const currentLevelId: LevelId | undefined = levels[levelIdx]?.id;
 
   // ================================================
   // LOD SYSTEM
@@ -124,25 +115,17 @@ export default function Map3D({
 
   // Forcer InstancedMesh en mode star pour la coloration par galaxie
   // (sinon le pool de materials partagés écrase les couleurs)
-  const effectiveRenderMode =
-    currentLevelId === "star" ? "stars" : renderMode;
-
-  const inStarsRenderMode =
-    currentLevelId === "star" && effectiveRenderMode === "stars";
+  const effectiveRenderMode = "stars";
+  const inStarsRenderMode = effectiveRenderMode === "stars";
 
   // ================================================
-  // DATA NIVEAU COURANT (avant filtrage)
+  // DATA (MODE STAR avec centres de galaxies)
   // ================================================
   const rawData: GraphData | null = useMemo(() => {
-    if (!levels.length) return null;
+    if (!graphData) return null;
 
-    if (currentLevelId === "galaxy") {
-      return levels[levelIdx].data;
-    }
-
-    // MODE STAR : inclure les centres de galaxies comme nœuds spéciaux
-    const starData = levels[levelIdx].data;
-    const galaxyData = graphData?.galaxies;
+    const starData = graphData.stars;
+    const galaxyData = graphData.galaxies;
     if (!galaxyData) return starData;
 
     const starNodes = [...(starData.nodes ?? [])];
@@ -155,7 +138,7 @@ export default function Map3D({
       nodes: [...starNodes, ...galaxyCenters],
       links: starData.links ?? []
     };
-  }, [levels, levelIdx, currentLevelId, graphData]);
+  }, [graphData]);
 
   // ================================================
   // Must-include ids (selected + trail)
@@ -175,12 +158,10 @@ export default function Map3D({
     if (!rawData || !graphData) return { nodes: [], links: [] };
 
     const rawNodes = (rawData.nodes ?? []) as GraphNode[];
-    const rawLinks = (rawData.links ?? []) as GraphLink[];
-
     let nodes = rawNodes;
 
     // Downsampling global si trop de stars
-    if (currentLevelId === "star" && nodes.length > MAX_NODES_RENDER) {
+    if (nodes.length > MAX_NODES_RENDER) {
       // Séparer les centres de galaxies des stars
       const galaxyCenters = nodes.filter((n: any) => n.__isGalaxyCenter);
       const stars = nodes.filter((n: any) => !n.__isGalaxyCenter);
@@ -198,43 +179,30 @@ export default function Map3D({
       nodes = ensureIncludedNodes(nodes, rawNodes, mustIncludeIds);
     }
 
-    // Filtrer les liens pour ne garder que ceux entre nœuds visibles
-    const nodeIdSet = new Set(nodes.map((n) => idStr(n.id)));
-    let filteredLinks = rawLinks.filter((link) => {
-      const s = linkEndId((link as any).source);
-      const t = linkEndId((link as any).target);
-      return nodeIdSet.has(s) && nodeIdSet.has(t);
-    });
+    // Appliquer le filtrage par type de relation si les liens doivent être visibles
+    let filteredLinks: GraphLink[] = [];
 
+    if (linksOnly && graphData?.stars?.links) {
+      // Filtrer les liens par types de relations activés
+      const allLinks = graphData.stars.links;
+      filteredLinks = filterGraphLinks(allLinks, enabledRelationTypes);
 
+      // Performance : limiter pour éviter surcharge navigateur
+      const MAX_DIRECT_LINKS = 10000;
+      if (filteredLinks.length > MAX_DIRECT_LINKS) {
+        // Échantillonnage intelligent : prioriser les arêtes à fort poids
+        filteredLinks = filteredLinks
+          .sort((a, b) => ((b as any).weight ?? 1) - ((a as any).weight ?? 1))
+          .slice(0, MAX_DIRECT_LINKS);
+      }
 
-    if (currentLevelId === "star") {
-      // Ne plus afficher les liens globaux par défaut
-      // Les star-tethers remplaceront cette visualisation
-      filteredLinks = [];
-
-      // TODO plus tard : ego-graph autour de selectedNode
-      // if (selectedNode) {
-      //   const egoLinks = getEgoGraphLinks(selectedNode.id, topK=20);
-      //   filteredLinks = egoLinks;
-      // }
-    }
-    // --- ensure stable id on links ---
-    filteredLinks = filteredLinks.map((l: any) => {
-      if (!l.id) l.id = linkIdStable(l);
-      return l;
-    });
-
-    if (currentLevelId === "galaxy") {
-      // On laisse les liens de ForceGraph vides : les bundles sont dessinés en layer Three
-      filteredLinks = [];
+      console.log(`[displayData] Affichage de ${filteredLinks.length} liens filtrés`);
     }
 
     return { nodes, links: filteredLinks };
   }, [
     rawData,
     graphData,
-    currentLevelId,
     enabledRelationTypes,
     shouldShowStarLinks,
     mustIncludeIds,
@@ -351,10 +319,10 @@ export default function Map3D({
       });
     }
 
-    // bundles only in galaxy level, and only if not linksOnly (au choix)
-    if (currentLevelId !== "galaxy") return;
+    // Afficher les bundles entre galaxies seulement si linksOnly et SEMANTIC sont activés
+    if (!linksOnly) return;
+    if (!enabledRelationTypes.has('SEMANTIC')) return;
     if (!galaxyBundles.length) return;
-    if (linksOnly) return; // option: si linksOnly, tu veux peut-être n'afficher QUE bundles → mets false si tu préfères
 
     const group = new THREE.Group();
     group.name = "galaxy-bundles";
@@ -391,7 +359,7 @@ export default function Map3D({
       });
       mat.dispose();
     };
-  }, [currentLevelId, galaxyBundles, linksOnly]);
+  }, [galaxyBundles, linksOnly, enabledRelationTypes]);
 
   // ================================================
   // LAYER: STAR TETHERS (courbes star → centre galaxie)
@@ -411,9 +379,9 @@ export default function Map3D({
       });
     }
 
-    // Tethers uniquement en mode star ET quand "Afficher les liens" est activé
-    if (currentLevelId !== "star") return;
-    if (!linksOnly) return;  // Seulement si l'utilisateur active les liens
+    // Tethers uniquement quand "Afficher les liens" et SEMANTIC sont activés
+    if (!linksOnly) return;
+    if (!enabledRelationTypes.has('SEMANTIC')) return;
     if (!graphData) return;
 
     // Échantillonner les stars à afficher
@@ -470,7 +438,7 @@ export default function Map3D({
         if (obj.material) obj.material.dispose?.();
       });
     };
-  }, [currentLevelId, linksOnly, displayData.nodes, selectedNode, visibleNavigationNodeIds, graphData]);
+  }, [linksOnly, displayData.nodes, selectedNode, visibleNavigationNodeIds, graphData, enabledRelationTypes]);
 
   // ================================================
   // LAYER: STAR BACKBONE (MST + kNN hybride)
@@ -490,9 +458,9 @@ export default function Map3D({
       });
     }
 
-    // Backbone uniquement en mode star ET quand "Afficher les liens" est activé
-    if (currentLevelId !== "star") return;
-    if (!linksOnly) return;  // Seulement si l'utilisateur active les liens
+    // Backbone uniquement quand "Afficher les liens" et SEMANTIC sont activés
+    if (!linksOnly) return;
+    if (!enabledRelationTypes.has('SEMANTIC')) return;
     if (!graphData?.bundles?.star?.backbone) return;
 
     const backbone = graphData.bundles.star.backbone;
@@ -533,7 +501,102 @@ export default function Map3D({
         if (obj.material) obj.material.dispose?.();
       });
     };
-  }, [currentLevelId, linksOnly, graphData]);
+  }, [linksOnly, graphData, enabledRelationTypes]);
+
+  // ================================================
+  // LAYER: LIENS DIRECTS SÉMANTIQUES/ÉTYMOLOGIQUES
+  // ================================================
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    const scene: THREE.Scene = fg.scene();
+
+    // Nettoyage de l'ancienne couche
+    const existing = scene.getObjectByName("direct-relations");
+    if (existing) {
+      scene.remove(existing);
+      existing.traverse((obj: any) => {
+        if (obj.geometry) obj.geometry.dispose?.();
+        if (obj.material) obj.material.dispose?.();
+      });
+    }
+
+    // Afficher seulement si "Afficher les liens" est activé
+    if (!linksOnly) return;
+    if (!displayData.links || displayData.links.length === 0) return;
+
+    console.log(`[direct-relations] Rendu de ${displayData.links.length} liens directs`);
+
+    // Créer le groupe pour tous les liens directs
+    const group = new THREE.Group();
+    group.name = "direct-relations";
+
+    // Créer les matériaux pour chaque type de relation
+    const etymologyMaterial = new THREE.LineBasicMaterial({
+      color: 0xff6b6b,  // Rouge pour ETYMOLOGY
+      transparent: true,
+      opacity: 0.3,
+    });
+
+    const semanticMaterial = new THREE.LineBasicMaterial({
+      color: 0x4ecdc4,  // Cyan pour SEMANTIC
+      transparent: true,
+      opacity: 0.2,
+    });
+
+    // Rendu de chaque lien
+    for (const link of displayData.links) {
+      // Récupérer les positions source et cible
+      const sourceId = String(linkEndId((link as any).source));
+      const targetId = String(linkEndId((link as any).target));
+
+      const sourceNode = displayNodeById.get(sourceId);
+      const targetNode = displayNodeById.get(targetId);
+
+      if (!sourceNode || !targetNode) continue;
+      if (sourceNode.x == null || sourceNode.y == null) continue;
+      if (targetNode.x == null || targetNode.y == null) continue;
+
+      // Déterminer la couleur du lien selon les types de relations
+      const relationTypes = (link as any).relationTypes || [];
+      const hasEtymology = relationTypes.some(
+        (rt: string) => normalizeRelationType(rt) === 'ETYMOLOGY'
+      );
+
+      const material = hasEtymology ? etymologyMaterial : semanticMaterial;
+
+      // Créer la géométrie de ligne droite
+      const points = [
+        new THREE.Vector3(
+          sourceNode.x,
+          sourceNode.y,
+          (sourceNode as any).z ?? 0
+        ),
+        new THREE.Vector3(
+          targetNode.x,
+          targetNode.y,
+          (targetNode as any).z ?? 0
+        ),
+      ];
+
+      const geometry = new THREE.BufferGeometry().setFromPoints(points);
+      const line = new THREE.Line(geometry, material);
+
+      group.add(line);
+    }
+
+    scene.add(group);
+
+    return () => {
+      // Nettoyage au démontage
+      scene.remove(group);
+      group.traverse((obj: any) => {
+        if (obj.geometry) obj.geometry.dispose?.();
+      });
+      etymologyMaterial.dispose();
+      semanticMaterial.dispose();
+    };
+  }, [linksOnly, displayData.links, displayNodeById, enabledRelationTypes]);
 
   // ================================================
   // WEBGL CONTEXT LOST RECOVERY
@@ -599,7 +662,7 @@ export default function Map3D({
     const cap = 1;  // Très conservateur
     r.setPixelRatio(cap);
     console.log(`[PixelRatio] Set to ${cap}, devicePixelRatio=${window.devicePixelRatio}`);
-  }, [currentLevelId]);
+  }, []);
 
   // ================================================
   // BOUNDING BOX + CAMERA (basé sur displayData)
@@ -611,7 +674,7 @@ export default function Map3D({
     const nodes = displayData.nodes;
     if (!nodes.length) return;
 
-    console.log(`[camera useEffect] currentLevelId=${currentLevelId}, initialized=${cameraInitializedRef.current}, nodes=${nodes.length}`);
+    console.log(`[camera useEffect] initialized=${cameraInitializedRef.current}, nodes=${nodes.length}`);
 
     const scene: THREE.Scene = fg.scene();
 
@@ -675,10 +738,7 @@ export default function Map3D({
     // Positionner la caméra UNIQUEMENT lors de la première initialisation
     // Après ça, ne JAMAIS toucher la caméra (l'utilisateur garde le contrôle total)
     if (!cameraInitializedRef.current) {
-      const levelDistanceFactor =
-        currentLevelId === "galaxy" ? 5.0 : currentLevelId === "star" ? 3.5 : 2.8;
-
-      const dist = rm * levelDistanceFactor;
+      const dist = rm * 3.5;
       const camPos = new THREE.Vector3(c.x + dist, c.y + dist * 0.4, c.z + dist);
 
       fg.cameraPosition(camPos, c, 0);
@@ -690,52 +750,8 @@ export default function Map3D({
     return () => {
       if (helper) scene.remove(helper);
     };
-  }, [displayData.nodes, currentLevelId]); // currentLevelId nécessaire pour sauvegarder/restaurer caméra
+  }, [displayData.nodes]);
 
-  // ================================================
-  // FORCER LA CAMÉRA À RESTER EN PLACE lors du changement de niveau
-  // ForceGraph3D ajuste automatiquement le zoom selon le nombre de nodes,
-  // on doit contrer ce comportement
-  // ================================================
-  useEffect(() => {
-    const fg = fgRef.current;
-    if (!fg || !cameraInitializedRef.current || !savedCameraState.current) return;
-
-    // Utiliser requestAnimationFrame pour s'exécuter APRÈS le rendu de ForceGraph3D
-    const rafId = requestAnimationFrame(() => {
-      if (savedCameraState.current) {
-        console.log('[force camera] Forcing camera to saved position');
-        fg.cameraPosition(
-          savedCameraState.current.pos,
-          savedCameraState.current.lookAt,
-          0
-        );
-      }
-    });
-
-    return () => cancelAnimationFrame(rafId);
-  }, [currentLevelId]); // Se déclenche à chaque changement de niveau
-
-  // ================================================
-  // SAUVEGARDER la position caméra quand l'utilisateur la change
-  // ================================================
-  useEffect(() => {
-    const fg = fgRef.current;
-    if (!fg || !cameraInitializedRef.current) return;
-
-    const intervalId = setInterval(() => {
-      const camera = fg.camera();
-      const controls = fg.controls();
-      if (camera && controls) {
-        savedCameraState.current = {
-          pos: camera.position.clone(),
-          lookAt: controls.target.clone()
-        };
-      }
-    }, 500); // Sauvegarder toutes les 500ms
-
-    return () => clearInterval(intervalId);
-  }, []); // Une seule fois
 
   // ================================================
   // TRACK CAMERA DISTANCE (throttle 500ms)
@@ -833,7 +849,7 @@ export default function Map3D({
         coloredStarCount++;
       }
 
-      const { radius, color, opacity } = computeStarVisual(node, isSelected, galaxyId);
+      const { radius, color, opacity } = computeStarVisual(node, isSelected, galaxyId, showStars, showGalaxies);
 
       tempObj.position.set(node.x ?? 0, node.y ?? 0, node.z ?? 0);
       tempObj.scale.setScalar(radius);
@@ -850,7 +866,7 @@ export default function Map3D({
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
 
     console.log(`[updateStarInstances] Done: ${galaxyCenterCount} centers, ${coloredStarCount} colored stars`);
-  }, [inStarsRenderMode, selectedNode, graphData]);
+  }, [inStarsRenderMode, selectedNode, graphData, showStars, showGalaxies]);
 
   // Create/destroy instanced mesh on mode changes
   useEffect(() => {
@@ -1011,7 +1027,7 @@ export default function Map3D({
   // ================================================
   const nodeThreeObject = (node: GraphNode & { degree?: number; density?: number }) => {
     // stars: rendered by InstancedMesh (so return null)
-    if (inStarsRenderMode && currentLevelId === "star") return null as any;
+    if (inStarsRenderMode) return null as any;
 
     const geom = galaxyGeomRef.current;
     const pool = galaxyMatPoolRef.current;
@@ -1024,9 +1040,7 @@ export default function Map3D({
     const intensityFromDeg = Math.min(1, Math.log10(deg + 2) / 2);
     const density = d > 0 ? d : intensityFromDeg;
 
-    const levelScale =
-      currentLevelId === "galaxy" ? 3.0 : currentLevelId === "star" ? 1.6 : 1.2;
-
+    const levelScale = 1.6;
     const baseR = 0.7 * levelScale;
     const intensity = 0.35 + 0.65 * density;
 
@@ -1037,11 +1051,8 @@ export default function Map3D({
     const color = galaxyTempColorRef.current;
     if (isSelected) {
       color.set(0x4ecdc4);
-    } else if (currentLevelId === "galaxy") {
-      // Niveau galaxy : couleur unique par galaxie
-      color.copy(getGalaxyColor(String(node.id)));
-    } else if (currentLevelId === "star") {
-      // Niveau star (mais LOD désactive InstancedMesh) : couleur par galaxie
+    } else {
+      // Couleur par galaxie
       const star = graphData?.starIndex.get(String(node.id));
       const galaxyId = star?.galaxy != null ? String(star.galaxy) : undefined;
 
@@ -1051,9 +1062,6 @@ export default function Map3D({
         // Stars void : couleur par densité
         color.setHSL(0.78 - 0.3 * intensity, 1, 0.45 + 0.3 * intensity);
       }
-    } else {
-      // Autres niveaux : couleur par densité
-      color.setHSL(0.78 - 0.3 * intensity, 1, 0.45 + 0.3 * intensity);
     }
 
     const opacity = isSelected ? 1.0 : 0.55 + 0.45 * intensity;
@@ -1071,8 +1079,7 @@ export default function Map3D({
   // ================================================
   // LIENS — 3D safe (no rgba)
   // ================================================
-  const linksVisible =
-    currentLevelId === "star" ? (linksOnly ? true : shouldShowStarLinks) : true;
+  const linksVisible = linksOnly ? true : shouldShowStarLinks;
 
   const linkColor = (_link: GraphLink) => "#ffd296";
 
@@ -1101,46 +1108,7 @@ export default function Map3D({
           { keys: "Molette", description: "Zoomer" },
         ]}
       >
-        {/* Sélecteur de niveau */}
-        <div style={{ marginTop: "12px" }}>
-          <label
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: "6px",
-              fontSize: "13px",
-              color: "#f5f5f5",
-            }}
-          >
-            <span style={{ opacity: 0.7 }}>Changer de niveau :</span>
-            <select
-              value={levels[levelIdx]?.id}
-              onChange={(e) => {
-                const id = e.target.value as LevelId;
-                const idx = levels.findIndex((l) => l.id === id);
-                if (idx >= 0) setLevelIdx(idx);
-              }}
-              style={{
-                background: "rgba(255, 255, 255, 0.1)",
-                color: "#f5f5f5",
-                borderRadius: 6,
-                border: "1px solid rgba(255, 255, 255, 0.2)",
-                padding: "6px 10px",
-                fontSize: 13,
-                cursor: "pointer",
-                outline: "none",
-              }}
-            >
-              {levels.map((l) => (
-                <option key={l.id} value={l.id} style={{ background: "#111" }}>
-                  {l.id}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        {/* Toggle liens seuls */}
+        {/* Toggle liens */}
         <div style={{ marginTop: "12px" }}>
           <label
             style={{
@@ -1158,18 +1126,60 @@ export default function Map3D({
               onChange={(e) => setLinksOnly(e.target.checked)}
               style={{ cursor: "pointer" }}
             />
-            Afficher uniquement les liens
+            Afficher les liens
           </label>
         </div>
 
-        {/* Filtre de types de relations - niveau star uniquement */}
-        {currentLevelId === "star" && (
-          <RelationFilter
-            enabledTypes={enabledRelationTypes}
-            onToggle={toggleRelationType}
-            onReset={resetRelationFilter}
-          />
-        )}
+        {/* Toggle étoiles */}
+        <div style={{ marginTop: "8px" }}>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              fontSize: "13px",
+              color: "#f5f5f5",
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={showStars}
+              onChange={(e) => setShowStars(e.target.checked)}
+              style={{ cursor: "pointer" }}
+            />
+            Afficher les étoiles
+          </label>
+        </div>
+
+        {/* Toggle galaxies */}
+        <div style={{ marginTop: "8px" }}>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              fontSize: "13px",
+              color: "#f5f5f5",
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={showGalaxies}
+              onChange={(e) => setShowGalaxies(e.target.checked)}
+              style={{ cursor: "pointer" }}
+            />
+            Afficher les galaxies
+          </label>
+        </div>
+
+        {/* Filtre de types de relations */}
+        <RelationFilter
+          enabledTypes={enabledRelationTypes}
+          onToggle={toggleRelationType}
+          onReset={resetRelationFilter}
+        />
 
         {DEBUG_PANEL && (
           <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75, color: "#ddd" }}>
@@ -1223,13 +1233,13 @@ export default function Map3D({
             linksOnly
               ? (() => null) as any
               : ((node: any) => {
-                if (inStarsRenderMode && currentLevelId === "star") return null;
+                if (inStarsRenderMode) return null;
                 return nodeThreeObject(node);
               }) as any
           }
           nodeLabel={(node: any) => {
             const n = node as GraphNode;
-            if (inStarsRenderMode && currentLevelId === "star") return "";
+            if (inStarsRenderMode) return "";
             return (n as any).name ?? idStr(n.id);
           }}
           // Liens (3D safe)
@@ -1242,6 +1252,65 @@ export default function Map3D({
           linkDirectionalParticleWidth={1 as any}
 
         />
+      )}
+
+      {/* Panneau d'information de l'étoile sélectionnée */}
+      {selectedNode && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: "20px",
+            right: "20px",
+            background: "rgba(15, 15, 25, 0.92)",
+            backdropFilter: "blur(10px)",
+            border: "1px solid rgba(255, 255, 255, 0.15)",
+            borderRadius: "8px",
+            padding: "16px 20px",
+            minWidth: "250px",
+            maxWidth: "350px",
+            boxShadow: "0 4px 20px rgba(0, 0, 0, 0.5)",
+            color: "#f5f5f5",
+            fontSize: "14px",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              marginBottom: "12px",
+            }}
+          >
+            <div style={{ fontWeight: "600", fontSize: "16px", color: "#4ecdc4" }}>
+              {(selectedNode as any).name || selectedNode.id}
+            </div>
+            <button
+              onClick={() => setSelectedNode(null)}
+              style={{
+                background: "none",
+                border: "none",
+                color: "#999",
+                cursor: "pointer",
+                fontSize: "18px",
+                padding: "0",
+                marginLeft: "12px",
+                lineHeight: "1",
+              }}
+              title="Fermer"
+            >
+              ×
+            </button>
+          </div>
+
+          <div style={{ fontSize: "12px", color: "#999", marginTop: "8px" }}>
+            <div>ID: {selectedNode.id}</div>
+            {(selectedNode as any).__isGalaxyCenter && (
+              <div style={{ marginTop: "4px", color: "#ffd296" }}>
+                Centre de galaxie
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

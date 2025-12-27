@@ -29,7 +29,7 @@ export const RELATION_TYPES: RelationTypeConfig[] = [
     label: 'Sémantique',
     color: '#4ecdc4',
     description: 'Relations sémantiques (hyperonyme, antonyme, etc.)',
-    enabledByDefault: true,
+    enabledByDefault: false,
   },
 ];
 
