@@ -42,6 +42,7 @@ export function useLemmaGraph(): LemmaGraphData {
           senseCount: lemma.senseCount,
           relationCount: lemma.relationCount,
           synsets: lemma.synsets,
+          galaxy: lemma.galaxy,  // Include galaxy for color synchronization
         }));
 
         setData({

@@ -2,17 +2,18 @@ import React, { useMemo } from 'react';
 import { Text } from '@react-three/drei';
 import type { WordNode } from '../../types/game';
 import { Vector3 } from 'three';
+import { galaxyColorToHex, isVoidGalaxy, VOID_COLOR_HEX } from '../../utils/galaxyColors';
 
 interface WordPlanetProps {
   word: WordNode;
   playerPosition: Vector3;
-  isDiscovered: boolean;
+  isDiscovered: boolean; // Keep for potential future use (proximity-based effects)
 }
 
 export const WordPlanet: React.FC<WordPlanetProps> = ({
   word,
   playerPosition,
-  isDiscovered,
+  isDiscovered: _isDiscovered, // Unused - galaxy color system replaced discovery-based colors
 }) => {
   // Calculate distance to player
   const distance = useMemo(() => {
@@ -39,7 +40,14 @@ export const WordPlanet: React.FC<WordPlanetProps> = ({
 
   // Visual properties based on state
   const opacity = visualState === 'undiscovered' ? 0.3 : visualState === 'approaching' ? 0.6 : 1.0;
-  const color = isDiscovered ? '#4ecdc4' : '#999999';
+
+  // Color based on galaxy membership (unified across all views)
+  const color = useMemo(() => {
+    if (isVoidGalaxy(word.galaxy)) {
+      return VOID_COLOR_HEX;
+    }
+    return galaxyColorToHex(word.galaxy);
+  }, [word.galaxy]);
 
   // Show label only when approaching or discovered
   const showLabel = visualState !== 'undiscovered';

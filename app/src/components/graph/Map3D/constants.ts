@@ -2,7 +2,7 @@
 
 // ===== RENDERING LIMITS =====
 /** Maximum number of nodes to render (downsampling threshold) */
-export const MAX_NODES_RENDER = 20000;
+export const MAX_NODES_RENDER = 15000;
 
 // ===== GPU MEMORY MANAGEMENT =====
 /** Pool size for reusable galaxy materials (prevents GPU memory leaks) */
@@ -33,8 +33,7 @@ export const LOD_RATIOS = {
 } as const;
 
 // ===== VISUAL CONFIGURATION =====
-/** Golden angle in degrees for optimal color distribution across galaxies */
-export const GOLDEN_ANGLE = 137.5;
+// Note: GOLDEN_ANGLE moved to /app/src/utils/galaxyColors.ts (shared utility)
 
 /** Radius for galaxy center nodes */
 export const GALAXY_CENTER_RADIUS = 3.0;

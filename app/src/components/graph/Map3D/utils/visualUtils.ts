@@ -1,6 +1,5 @@
 import * as THREE from "three";
 import {
-  GOLDEN_ANGLE,
   GALAXY_CENTER_RADIUS,
   GALAXY_CENTER_OPACITY,
   STAR_LEVEL_SCALE,
@@ -8,6 +7,7 @@ import {
   SELECTION_COLOR,
   SELECTION_SCALE,
 } from "../constants";
+import { galaxyColorToThree } from "../../../../utils/galaxyColors";
 
 /**
  * Visual properties for a node (radius, color, opacity)
@@ -19,27 +19,6 @@ export interface NodeVisual {
 }
 
 /**
- * Generates a unique and stable color for each galaxy
- * Uses golden angle (137.5°) for optimal distribution across the color wheel
- * @param galaxyId - Galaxy identifier (e.g., "gc_0", "gc_1")
- * @returns THREE.Color with HSL-based coloring
- */
-export function getGalaxyColor(galaxyId: string): THREE.Color {
-  // Extraire le numéro de la galaxie (ex: "gc_0" -> 0)
-  const match = galaxyId.match(/\d+/);
-  const num = match ? parseInt(match[0]) : 0;
-
-  // Distribuer les teintes sur 360° pour 46 galaxies
-  const hue = (num * GOLDEN_ANGLE) % 360 / 360;  // Golden angle pour meilleure distribution
-  const saturation = 0.85;  // Couleurs vives
-  const lightness = 0.55;   // Ni trop sombre, ni trop clair
-
-  const color = new THREE.Color();
-  color.setHSL(hue, saturation, lightness);
-  return color;
-}
-
-/**
  * Computes visual properties for galaxy center nodes
  * @param node - Graph node representing a galaxy center
  * @param showGalaxies - Whether galaxies should be fully visible or dimmed
@@ -48,7 +27,7 @@ export function getGalaxyColor(galaxyId: string): THREE.Color {
 export function computeGalaxyCenterVisual(node: any, showGalaxies: boolean = true): NodeVisual {
   // Centres de galaxies : plus gros, couleur de leur galaxie
   const radius = GALAXY_CENTER_RADIUS;  // Beaucoup plus gros que les stars
-  const color = showGalaxies ? getGalaxyColor(node.id) : new THREE.Color(0x111111);  // Gris très sombre si masquées
+  const color = showGalaxies ? galaxyColorToThree(node.id) : new THREE.Color(0x111111);  // Gris très sombre si masquées
   const opacity = showGalaxies ? GALAXY_CENTER_OPACITY : 0.08;  // Très transparent si masquées
   return { radius, color, opacity };
 }
@@ -96,7 +75,7 @@ export function computeStarVisual(
     color.set(0x111111);
   } else if (galaxyId !== undefined && galaxyId !== 'void') {
     // Couleur unique par galaxie (normalisée en string)
-    color.copy(getGalaxyColor(galaxyId));
+    color.copy(galaxyColorToThree(galaxyId));
   } else {
     // Couleur par densité pour les nœuds isolés (void)
     color.setHSL(0.78 - 0.3 * intensity, 1, 0.45 + 0.3 * intensity);

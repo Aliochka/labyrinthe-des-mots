@@ -6,9 +6,6 @@ import type { GraphNode } from "../../../../types/graph";
 import type { VoronoiResult } from "./voronoi";
 import {
   IMPORTANCE_BASE,
-  VORONOI_BASE_HUE,
-  VORONOI_BASE_SAT,
-  VORONOI_BASE_LIGHT,
   MIN_CELL_OPACITY,
   MAX_CELL_OPACITY,
   MIN_BORDER_WIDTH,
@@ -21,6 +18,7 @@ import {
   FONT_SIZE_FACTOR,
   TEXT_SHADOW_BLUR,
 } from "../constants";
+import { galaxyColorToHSLComponents, isVoidGalaxy } from "../../../../utils/galaxyColors";
 
 /**
  * Drawing context for Voronoi cells
@@ -34,6 +32,8 @@ export interface VoronoiDrawContext {
   exploredIdSet: Set<string>;
   /** All display nodes (for neighbor lookup) */
   displayNodes: GraphNode[];
+  /** Star index for galaxy lookup (maps node ID to star data with galaxy field) */
+  starIndex: Map<string, any>;
 }
 
 /**
@@ -74,16 +74,42 @@ export function drawVoronoiCell(
   if (isExplored) cellAlpha *= 1.1;
   cellAlpha = Math.min(cellAlpha, MAX_CELL_OPACITY);
 
-  // Color palette: brighter for higher importance
-  let hue = VORONOI_BASE_HUE - importance * 50;
-  let sat = VORONOI_BASE_SAT + importance * 30;
-  let light = VORONOI_BASE_LIGHT + importance * 25;
+  // Galaxy-based coloring
+  // Check if this node is a galaxy center (ID starts with "gc_")
+  const isGalaxyCenter = typeof node.id === 'string' && node.id.startsWith('gc_');
 
-  if (isExplored) {
-    light += EXPLORED_LIGHTNESS_BOOST;
-    sat += 10;
+  let galaxyId: string | undefined;
+  if (isGalaxyCenter) {
+    // Galaxy centers use their own ID as the galaxy color
+    galaxyId = node.id;
+  } else {
+    // Stars lookup their galaxy from the starIndex
+    const starData = drawContext.starIndex.get(node.id);
+    galaxyId = starData?.galaxy;
   }
 
+  let hue: number, sat: number, light: number;
+
+  if (isVoidGalaxy(galaxyId)) {
+    // Void nodes: neutral gray
+    hue = 0;
+    sat = 0;
+    light = 60;  // #999999
+  } else {
+    // Galaxy-specific color (for both galaxy centers and their stars)
+    const galaxyHSL = galaxyColorToHSLComponents(galaxyId!);
+    hue = galaxyHSL.hue;
+    sat = galaxyHSL.sat;
+    light = galaxyHSL.light;
+  }
+
+  // Apply exploration boost (keep UX consistency)
+  if (isExplored) {
+    light += EXPLORED_LIGHTNESS_BOOST;
+    sat = Math.min(sat + 10, 100);
+  }
+
+  // Selection override: cyan
   if (isSelected) {
     hue = 180;
     sat = 100;

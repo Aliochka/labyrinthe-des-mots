@@ -23,8 +23,9 @@ import { galaxyDataService } from "../../../services/GalaxyDataService";
 import { idStr, linkEndId, linkIdStable } from "./utils/idUtils";
 import { hashString } from "./utils/hashUtils";
 import { ensureIncludedNodes } from "./utils/nodeFiltering";
-import { getGalaxyColor, computeStarVisual } from "./utils/visualUtils";
+import { computeStarVisual } from "./utils/visualUtils";
 import { sampleStarsForTethers, buildTetherCurve } from "./utils/samplingUtils";
+import { galaxyColorToThree } from "../../../utils/galaxyColors";
 import { useGalaxyMaterials } from "./hooks/useGalaxyMaterials";
 import { MAX_NODES_RENDER, DEBUG_PANEL, SHOW_BOUNDING_BOX_HELPER } from "./constants";
 import { filterGraphLinks } from "../../../utils/linkFilters";
@@ -42,8 +43,9 @@ interface Props {
 // - ./utils/idUtils.ts (idStr, linkEndId, linkIdStable)
 // - ./utils/hashUtils.ts (hashString, simpleHash)
 // - ./utils/nodeFiltering.ts (ensureIncludedNodes)
-// - ./utils/visualUtils.ts (getGalaxyColor, computeGalaxyCenterVisual, computeStarVisual)
+// - ./utils/visualUtils.ts (computeGalaxyCenterVisual, computeStarVisual)
 // - ./utils/samplingUtils.ts (sampleStarsForTethers, buildTetherCurve)
+// - ../../../utils/galaxyColors.ts (galaxyColorToThree - shared color utility)
 // ================================================
 
 export default function Map3D({
@@ -1057,7 +1059,7 @@ export default function Map3D({
       const galaxyId = star?.galaxy != null ? String(star.galaxy) : undefined;
 
       if (galaxyId !== undefined && galaxyId !== 'void') {
-        color.copy(getGalaxyColor(galaxyId));
+        color.copy(galaxyColorToThree(galaxyId));
       } else {
         // Stars void : couleur par densité
         color.setHSL(0.78 - 0.3 * intensity, 1, 0.45 + 0.3 * intensity);

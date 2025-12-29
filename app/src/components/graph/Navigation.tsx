@@ -4,12 +4,15 @@ import { Vector3 } from 'three';
 import { Player } from '../game/Player';
 import { WordPlanet } from '../game/WordPlanet';
 import { DistantStars } from '../game/DistantStars';
+import { WordLinks } from '../game/WordLinks';
 import { useKeyboardControls } from '../../hooks/useKeyboardControls';
 import { usePlayerPhysics } from '../../hooks/usePlayerPhysics';
 import { useLemmaGraph } from '../../hooks/useLemmaGraph';
+import { useNavigationLinks } from '../../hooks/useNavigationLinks';
 import { useProximityDetection } from '../../hooks/useProximityDetection';
 import { useAppStore } from '../../store/appStore';
 import { ControlPanel } from '../ui/ControlPanel';
+import { galaxyDataService } from '../../services/GalaxyDataService';
 
 interface NavigationProps {
   width?: number;
@@ -23,7 +26,11 @@ const RENDER_DISTANCE = 50;
 const STAR_DISTANCE = 500;
 
 // Game scene component (inside Canvas)
-const GameScene: React.FC<{ randomSpawn: Vector3 }> = ({ randomSpawn }) => {
+const GameScene: React.FC<{
+  randomSpawn: Vector3;
+  galaxyPositions: Map<string, Vector3>;
+  showLinks: boolean;
+}> = ({ randomSpawn, galaxyPositions, showLinks }) => {
   const { camera } = useThree();
   const controls = useKeyboardControls();
   const physics = usePlayerPhysics(randomSpawn);
@@ -32,6 +39,13 @@ const GameScene: React.FC<{ randomSpawn: Vector3 }> = ({ randomSpawn }) => {
   const [nearbyWords, setNearbyWords] = useState<typeof wordNodes>([]);
   const [distantWords, setDistantWords] = useState<typeof wordNodes>([]);
   const lastCullRef = useRef<number>(0);
+
+  // Compute edges for links rendering
+  const navigationEdges = useNavigationLinks(
+    wordNodes,
+    physics.position,
+    RENDER_DISTANCE
+  );
 
   // Store for syncing
   const setVisibleNavigationNodeIds = useAppStore((s) => s.setVisibleNavigationNodeIds);
@@ -139,6 +153,14 @@ const GameScene: React.FC<{ randomSpawn: Vector3 }> = ({ randomSpawn }) => {
       <directionalLight position={[10, 10, 5]} intensity={0.5} />
       <pointLight position={[0, 50, 0]} intensity={0.3} />
 
+      {/* Word Links (semantic/etymology/tethers) */}
+      <WordLinks
+        edges={navigationEdges}
+        nearbyNodes={nearbyWords}
+        galaxyPositions={galaxyPositions}
+        showLinks={showLinks}
+      />
+
       {/* Player */}
       <Player position={physics.position} velocity={physics.velocity} />
 
@@ -176,7 +198,44 @@ export const Navigation: React.FC<NavigationProps> = ({
   initialQuery: _initialQuery,
 }) => {
   const [randomSpawn, setRandomSpawn] = useState<Vector3 | null>(null);
+  const [galaxyPositions, setGalaxyPositions] = useState<Map<string, Vector3>>(new Map());
+  const [showLinks, setShowLinks] = useState(false);
   const { nodes: allNodes } = useLemmaGraph();
+
+  // Load galaxy positions from universe.json
+  useEffect(() => {
+    fetch('/universe.json')
+      .then(res => res.json())
+      .then(data => {
+        console.log('[Navigation] Loading universe.json for galaxy positions...');
+
+        // Initialize GalaxyDataService
+        galaxyDataService.initialize({
+          galaxies: data.galaxies,
+          stars: data.stars,
+          bundles: data.bundles,
+          galaxyMembersMap: new Map(),
+          starIndex: new Map(),
+        });
+
+        // Extract galaxy positions with same scaling as WordNode (x5)
+        const positions = new Map<string, Vector3>();
+        if (data.galaxies && data.galaxies.nodes) {
+          data.galaxies.nodes.forEach((galaxy: any) => {
+            positions.set(
+              galaxy.id,
+              new Vector3(galaxy.x * 5, galaxy.y * 5, galaxy.z * 5)
+            );
+          });
+        }
+
+        console.log(`[Navigation] Loaded ${positions.size} galaxy positions`);
+        setGalaxyPositions(positions);
+      })
+      .catch(error => {
+        console.error('[Navigation] Failed to load universe.json:', error);
+      });
+  }, []);
 
   // Generate random spawn position near a random word
   useEffect(() => {
@@ -215,7 +274,11 @@ export const Navigation: React.FC<NavigationProps> = ({
           fov: 60,
         }}
       >
-        <GameScene randomSpawn={randomSpawn} />
+        <GameScene
+          randomSpawn={randomSpawn}
+          galaxyPositions={galaxyPositions}
+          showLinks={showLinks}
+        />
       </Canvas>
 
       {/* Control Panel */}
@@ -229,7 +292,31 @@ export const Navigation: React.FC<NavigationProps> = ({
           { keys: 'Shift', description: 'Boost' },
           { keys: 'Souris', description: 'Regarder' },
         ]}
-      />
+      >
+        {/* Toggle for word links */}
+        <div style={{
+          marginTop: 12,
+          paddingTop: 12,
+          borderTop: '1px solid rgba(255, 255, 255, 0.1)'
+        }}>
+          <label style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            cursor: 'pointer',
+            color: '#f5f5f5',
+            fontSize: 11,
+          }}>
+            <input
+              type="checkbox"
+              checked={showLinks}
+              onChange={(e) => setShowLinks(e.target.checked)}
+              style={{ cursor: 'pointer' }}
+            />
+            <span>Afficher les liens</span>
+          </label>
+        </div>
+      </ControlPanel>
 
     </div>
   );

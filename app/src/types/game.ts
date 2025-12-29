@@ -9,4 +9,5 @@ export interface WordNode {
   senseCount: number;
   relationCount: number;
   synsets: LemmaNode['synsets'];
+  galaxy?: string; // Galaxy (cluster) membership for color synchronization
 }
