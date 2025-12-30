@@ -39,13 +39,17 @@ export const SimpleSphere: React.FC<SimpleSphereProps> = ({
       tempObject.updateMatrix();
       meshRef.current!.setMatrixAt(i, tempObject.matrix);
 
-      // Apply galaxy color (full color, no darkening)
+      // Apply galaxy color with slightly boosted lightness for better visibility
       const galaxyId = word.galaxy || 'void';
-      const baseColor = isVoidGalaxy(galaxyId)
-        ? VOID_COLOR
-        : galaxyColorToThree(galaxyId);
-
-      tempColor.copy(baseColor);
+      if (isVoidGalaxy(galaxyId)) {
+        tempColor.copy(VOID_COLOR);
+      } else {
+        const baseColor = galaxyColorToThree(galaxyId);
+        // Slight lightness boost for mid-range visibility
+        const hsl = { h: 0, s: 0, l: 0 };
+        baseColor.getHSL(hsl);
+        tempColor.setHSL(hsl.h, hsl.s, Math.min(0.65, hsl.l + 0.1));
+      }
       meshRef.current!.setColorAt(i, tempColor);
     });
 
@@ -62,8 +66,7 @@ export const SimpleSphere: React.FC<SimpleSphereProps> = ({
       <sphereGeometry args={[1, 12, 12]} />
       <meshBasicMaterial
         vertexColors
-        transparent={true}
-        opacity={0.95}
+        toneMapped={false}
         depthTest={true}
         depthWrite={true}
       />

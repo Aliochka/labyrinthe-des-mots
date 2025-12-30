@@ -64,6 +64,7 @@ export const WordPlanet: React.FC<WordPlanetProps> = ({
           color={color}
           transparent
           opacity={opacity}
+          toneMapped={false}
         />
       </mesh>
 

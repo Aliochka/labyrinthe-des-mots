@@ -26,6 +26,7 @@ interface NavigationProps {
 const RENDER_DISTANCE_CLOSE = 100;  // Full WordPlanet spheres with labels
 const RENDER_DISTANCE_MID = 300;    // SimpleSphere without labels
 const RENDER_DISTANCE_FAR = 3000;   // DistantStars points
+const MAX_VISIBLE_WORDS = 100;      // Maximum number of words to display
 
 // Game scene component (inside Canvas)
 const GameScene: React.FC<{
@@ -89,16 +90,24 @@ const GameScene: React.FC<{
       const mid: typeof wordNodes = [];
       const far: typeof wordNodes = [];
 
-      wordNodes.forEach((word) => {
-        const distance = randomSpawn.distanceTo(word.position);
+      // Sort words by distance and take closest MAX_VISIBLE_WORDS
+      const wordsWithDistance = wordNodes.map((word) => ({
+        word,
+        distance: randomSpawn.distanceTo(word.position)
+      }));
+
+      wordsWithDistance.sort((a, b) => a.distance - b.distance);
+      const visibleWords = wordsWithDistance.slice(0, MAX_VISIBLE_WORDS);
+
+      // Distribute visible words into LOD tiers
+      visibleWords.forEach(({ word, distance }) => {
         if (distance <= RENDER_DISTANCE_CLOSE) {
           close.push(word);
         } else if (distance <= RENDER_DISTANCE_MID) {
           mid.push(word);
-        } else if (distance <= RENDER_DISTANCE_FAR) {
+        } else {
           far.push(word);
         }
-        // Beyond RENDER_DISTANCE_FAR: culled (not rendered)
       });
 
       setCloseWords(close);
@@ -124,16 +133,24 @@ const GameScene: React.FC<{
       const mid: typeof wordNodes = [];
       const far: typeof wordNodes = [];
 
-      wordNodes.forEach((word) => {
-        const distance = physics.position.distanceTo(word.position);
+      // Sort words by distance and take closest MAX_VISIBLE_WORDS
+      const wordsWithDistance = wordNodes.map((word) => ({
+        word,
+        distance: physics.position.distanceTo(word.position)
+      }));
+
+      wordsWithDistance.sort((a, b) => a.distance - b.distance);
+      const visibleWords = wordsWithDistance.slice(0, MAX_VISIBLE_WORDS);
+
+      // Distribute visible words into LOD tiers
+      visibleWords.forEach(({ word, distance }) => {
         if (distance <= RENDER_DISTANCE_CLOSE) {
           close.push(word);
         } else if (distance <= RENDER_DISTANCE_MID) {
           mid.push(word);
-        } else if (distance <= RENDER_DISTANCE_FAR) {
+        } else {
           far.push(word);
         }
-        // Beyond RENDER_DISTANCE_FAR: culled
       });
 
       // Only update if counts changed (avoid unnecessary re-renders)

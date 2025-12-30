@@ -34,13 +34,17 @@ export const DistantStars: React.FC<DistantStarsProps> = ({
       tempObject.updateMatrix();
       meshRef.current!.setMatrixAt(i, tempObject.matrix);
 
-      // Apply galaxy color (full color, no darkening)
+      // Apply galaxy color with boosted lightness for better visibility at distance
       const galaxyId = word.galaxy || 'void';
-      const baseColor = isVoidGalaxy(galaxyId)
-        ? VOID_COLOR
-        : galaxyColorToThree(galaxyId);
-
-      tempColor.copy(baseColor);
+      if (isVoidGalaxy(galaxyId)) {
+        tempColor.copy(VOID_COLOR);
+      } else {
+        const baseColor = galaxyColorToThree(galaxyId);
+        // Boost lightness to ensure colors remain visible at distance
+        const hsl = { h: 0, s: 0, l: 0 };
+        baseColor.getHSL(hsl);
+        tempColor.setHSL(hsl.h, hsl.s, Math.min(0.7, hsl.l + 0.15));
+      }
       meshRef.current!.setColorAt(i, tempColor);
     });
 
@@ -55,8 +59,7 @@ export const DistantStars: React.FC<DistantStarsProps> = ({
       <sphereGeometry args={[1, 8, 8]} />
       <meshBasicMaterial
         vertexColors
-        transparent={true}
-        opacity={0.95}
+        toneMapped={false}
         depthTest={true}
         depthWrite={true}
       />
