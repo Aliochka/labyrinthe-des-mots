@@ -3,7 +3,7 @@ import { Vector3 } from 'three';
 import { lemmaDataService } from '../services/LemmaDataService';
 import type { WordNode } from '../types/game';
 
-const POSITION_SCALE = 5; // Scale factor for positions
+const POSITION_SCALE = 10; // Scale factor for positions (reduced to 10x for denser universe)
 const MAX_RELATIONS = 100; // For normalization
 
 export interface LemmaGraphData {

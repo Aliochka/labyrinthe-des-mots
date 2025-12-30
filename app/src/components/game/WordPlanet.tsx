@@ -38,8 +38,8 @@ export const WordPlanet: React.FC<WordPlanetProps> = ({
     return baseSize + importanceBonus;
   }, [word.importance]);
 
-  // Visual properties based on state
-  const opacity = visualState === 'undiscovered' ? 0.3 : visualState === 'approaching' ? 0.6 : 1.0;
+  // Visual properties based on state (increased opacity for better visibility)
+  const opacity = visualState === 'undiscovered' ? 0.7 : visualState === 'approaching' ? 0.8 : 1.0;
 
   // Color based on galaxy membership (unified across all views)
   const color = useMemo(() => {

@@ -4,7 +4,7 @@ import { useFrame } from '@react-three/fiber';
 import type { WordNode } from '../../types/game';
 import { galaxyColorToThree, isVoidGalaxy } from '../../utils/galaxyColors';
 
-interface DistantStarsProps {
+interface SimpleSphereProps {
   words: WordNode[];
   playerPosition: Vector3;
 }
@@ -13,7 +13,12 @@ const tempObject = new Object3D();
 const tempColor = new Color();
 const VOID_COLOR = new Color(0x999999);
 
-export const DistantStars: React.FC<DistantStarsProps> = ({
+/**
+ * SimpleSphere: Mid-range LOD rendering (100-300 units)
+ * Renders words as colored spheres without labels for performance
+ * Uses InstancedMesh for efficient GPU rendering
+ */
+export const SimpleSphere: React.FC<SimpleSphereProps> = ({
   words,
   playerPosition: _playerPosition, // Not used after opacity fix
 }) => {
@@ -21,12 +26,12 @@ export const DistantStars: React.FC<DistantStarsProps> = ({
 
   // Update instance transforms every frame
   useFrame(() => {
-    if (!meshRef.current) return;
+    if (!meshRef.current || words.length === 0) return;
 
     words.forEach((word, i) => {
       // Calculate size based on importance only (×2 increase for better visibility)
-      // Base size: 0.3-1.6 units
-      const size = 0.3 + (word.importance || 0) * 1.3;
+      // Base size: 1.0-2.4 units
+      const size = 1.0 + (word.importance || 0) * 1.4;
 
       // Set position and scale
       tempObject.position.copy(word.position);
@@ -50,9 +55,11 @@ export const DistantStars: React.FC<DistantStarsProps> = ({
     }
   });
 
+  if (words.length === 0) return null;
+
   return (
     <instancedMesh ref={meshRef} args={[undefined, undefined, words.length]}>
-      <sphereGeometry args={[1, 8, 8]} />
+      <sphereGeometry args={[1, 12, 12]} />
       <meshBasicMaterial
         vertexColors
         transparent={true}

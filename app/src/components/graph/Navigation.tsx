@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { OrbitControls } from '@react-three/drei';
 import { Vector3 } from 'three';
 import { Player } from '../game/Player';
 import { WordPlanet } from '../game/WordPlanet';
+import { SimpleSphere } from '../game/SimpleSphere';
 import { DistantStars } from '../game/DistantStars';
 import { WordLinks } from '../game/WordLinks';
 import { useKeyboardControls } from '../../hooks/useKeyboardControls';
@@ -12,7 +14,7 @@ import { useNavigationLinks } from '../../hooks/useNavigationLinks';
 import { useProximityDetection } from '../../hooks/useProximityDetection';
 import { useAppStore } from '../../store/appStore';
 import { ControlPanel } from '../ui/ControlPanel';
-import { galaxyDataService } from '../../services/GalaxyDataService';
+import { RelationFilter } from '../ui/RelationFilter';
 
 interface NavigationProps {
   width?: number;
@@ -20,10 +22,10 @@ interface NavigationProps {
   initialQuery?: string;
 }
 
-// Render distance for word planets (only show nearby planets)
-const RENDER_DISTANCE = 50;
-// Distance for distant stars (show as points beyond RENDER_DISTANCE)
-const STAR_DISTANCE = 500;
+// LOD (Level of Detail) distances for 3-tier rendering system
+const RENDER_DISTANCE_CLOSE = 100;  // Full WordPlanet spheres with labels
+const RENDER_DISTANCE_MID = 300;    // SimpleSphere without labels
+const RENDER_DISTANCE_FAR = 3000;   // DistantStars points
 
 // Game scene component (inside Canvas)
 const GameScene: React.FC<{
@@ -36,31 +38,34 @@ const GameScene: React.FC<{
   const physics = usePlayerPhysics(randomSpawn);
   const { nodes: wordNodes, isLoading } = useLemmaGraph();
   const [discoveredWords, setDiscoveredWords] = useState<Set<string>>(new Set());
-  const [nearbyWords, setNearbyWords] = useState<typeof wordNodes>([]);
-  const [distantWords, setDistantWords] = useState<typeof wordNodes>([]);
+  const [closeWords, setCloseWords] = useState<typeof wordNodes>([]);      // 0-100 units
+  const [midWords, setMidWords] = useState<typeof wordNodes>([]);          // 100-300 units
+  const [farWords, setFarWords] = useState<typeof wordNodes>([]);          // 300-3000 units
   const lastCullRef = useRef<number>(0);
 
-  // Compute edges for links rendering
+  // Relation filtering from store
+  const enabledRelationTypes = useAppStore((s) => s.enabledRelationTypes);
+
+  // Compute edges for links rendering (500 unit distance for better visibility)
   const navigationEdges = useNavigationLinks(
     wordNodes,
     physics.position,
-    RENDER_DISTANCE
+    500
   );
 
   // Store for syncing
   const setVisibleNavigationNodeIds = useAppStore((s) => s.setVisibleNavigationNodeIds);
 
-  // Proximity detection (only check nearby words)
+  // Proximity detection (only check close words)
   const { justDiscovered } = useProximityDetection(
     physics.position,
-    nearbyWords,
+    closeWords,
     discoveredWords
   );
 
   // Track new discoveries
   useEffect(() => {
     if (justDiscovered.length > 0) {
-      console.log(`[Navigation] Discovered ${justDiscovered.length} new words:`, justDiscovered);
       setDiscoveredWords((prev) => {
         const next = new Set(prev);
         justDiscovered.forEach((word) => next.add(word));
@@ -74,67 +79,68 @@ const GameScene: React.FC<{
     const discoveredArray = Array.from(discoveredWords);
     if (discoveredArray.length > 0) {
       setVisibleNavigationNodeIds(discoveredArray);
-      console.log(`[Navigation] Synced ${discoveredArray.length} discovered words to store`);
     }
   }, [discoveredWords, setVisibleNavigationNodeIds]);
 
-  // Initialize nearby and distant words on first load
+  // Initialize 3-tier LOD words on first load
   useEffect(() => {
     if (wordNodes.length > 0) {
-      const nearby: typeof wordNodes = [];
-      const distant: typeof wordNodes = [];
+      const close: typeof wordNodes = [];
+      const mid: typeof wordNodes = [];
+      const far: typeof wordNodes = [];
 
       wordNodes.forEach((word) => {
         const distance = randomSpawn.distanceTo(word.position);
-        if (distance <= RENDER_DISTANCE) {
-          nearby.push(word);
-        } else if (distance <= STAR_DISTANCE) {
-          distant.push(word);
+        if (distance <= RENDER_DISTANCE_CLOSE) {
+          close.push(word);
+        } else if (distance <= RENDER_DISTANCE_MID) {
+          mid.push(word);
+        } else if (distance <= RENDER_DISTANCE_FAR) {
+          far.push(word);
         }
+        // Beyond RENDER_DISTANCE_FAR: culled (not rendered)
       });
 
-      setNearbyWords(nearby);
-      setDistantWords(distant);
-      console.log(`[Navigation] Initial render: ${nearby.length} nearby words, ${distant.length} distant stars`);
+      setCloseWords(close);
+      setMidWords(mid);
+      setFarWords(far);
     }
   }, [wordNodes, randomSpawn]);
 
   // Game loop
   useFrame((_state, delta) => {
-    // Update player physics
+    // Update player physics with camera direction
     const cameraDirection = new Vector3(0, 0, -1);
     cameraDirection.applyQuaternion(camera.quaternion);
     physics.update(controls, delta, cameraDirection);
 
-    // Update third-person camera
-    const cameraOffset = new Vector3(0, 15, 20); // Behind and above
-    const targetCameraPos = physics.position.clone().add(cameraOffset);
-    camera.position.lerp(targetCameraPos, 0.1);
+    // OrbitControls now handles camera positioning and rotation automatically
 
-    // Look at player
-    const lookAtTarget = physics.position.clone().add(new Vector3(0, 2, 0));
-    camera.lookAt(lookAtTarget);
-
-    // Cull distant word planets (only update every 500ms)
+    // 3-tier LOD culling (only update every 500ms)
     const now = Date.now();
     if (now - lastCullRef.current > 500) {
       lastCullRef.current = now;
-      const nearby: typeof wordNodes = [];
-      const distant: typeof wordNodes = [];
+      const close: typeof wordNodes = [];
+      const mid: typeof wordNodes = [];
+      const far: typeof wordNodes = [];
 
       wordNodes.forEach((word) => {
         const distance = physics.position.distanceTo(word.position);
-        if (distance <= RENDER_DISTANCE) {
-          nearby.push(word);
-        } else if (distance <= STAR_DISTANCE) {
-          distant.push(word);
+        if (distance <= RENDER_DISTANCE_CLOSE) {
+          close.push(word);
+        } else if (distance <= RENDER_DISTANCE_MID) {
+          mid.push(word);
+        } else if (distance <= RENDER_DISTANCE_FAR) {
+          far.push(word);
         }
+        // Beyond RENDER_DISTANCE_FAR: culled
       });
 
-      if (nearby.length !== nearbyWords.length || distant.length !== distantWords.length) {
-        setNearbyWords(nearby);
-        setDistantWords(distant);
-        console.log(`[Navigation] Updated: ${nearby.length} nearby words, ${distant.length} distant stars`);
+      // Only update if counts changed (avoid unnecessary re-renders)
+      if (close.length !== closeWords.length || mid.length !== midWords.length || far.length !== farWords.length) {
+        setCloseWords(close);
+        setMidWords(mid);
+        setFarWords(far);
       }
     }
   });
@@ -143,9 +149,6 @@ const GameScene: React.FC<{
     return null;
   }
 
-  // Log rendering info
-  console.log(`[GameScene] Rendering ${nearbyWords.length} nearby words, ${distantWords.length} distant stars, ${discoveredWords.size} discovered`);
-
   return (
     <>
       {/* Better lighting */}
@@ -153,41 +156,57 @@ const GameScene: React.FC<{
       <directionalLight position={[10, 10, 5]} intensity={0.5} />
       <pointLight position={[0, 50, 0]} intensity={0.3} />
 
-      {/* Word Links (semantic/etymology/tethers) */}
-      <WordLinks
-        edges={navigationEdges}
-        nearbyNodes={nearbyWords}
-        galaxyPositions={galaxyPositions}
-        showLinks={showLinks}
-      />
-
       {/* Player */}
       <Player position={physics.position} velocity={physics.velocity} />
 
-      {/* Word Planets (only nearby ones) */}
-      {nearbyWords.length > 0 ? (
-        nearbyWords.map((word) => (
-          <WordPlanet
-            key={word.id}
-            word={word}
-            playerPosition={physics.position}
-            isDiscovered={discoveredWords.has(word.id)}
-          />
-        ))
-      ) : (
-        <mesh position={[0, 0, 0]}>
-          <sphereGeometry args={[5, 32, 32]} />
-          <meshBasicMaterial color="red" />
-        </mesh>
+      {/* Close Words (0-100 units): Full WordPlanet spheres with labels */}
+      {closeWords.map((word) => (
+        <WordPlanet
+          key={word.id}
+          word={word}
+          playerPosition={physics.position}
+          isDiscovered={discoveredWords.has(word.id)}
+        />
+      ))}
+
+      {/* Mid-range Words (100-300 units): SimpleSphere without labels */}
+      {midWords.length > 0 && (
+        <SimpleSphere words={midWords} playerPosition={physics.position} />
       )}
 
-      {/* Distant Stars (words far away as luminous points) */}
-      {distantWords.length > 0 && (
-        <DistantStars words={distantWords} playerPosition={physics.position} />
+      {/* Far Words (300-3000 units): DistantStars points */}
+      {farWords.length > 0 && (
+        <DistantStars words={farWords} playerPosition={physics.position} />
       )}
+
+      {/* Word Links (rendered LAST to be in background) */}
+      <WordLinks
+        edges={navigationEdges}
+        nearbyNodes={[...closeWords, ...midWords, ...farWords]}
+        galaxyPositions={galaxyPositions}
+        showLinks={showLinks}
+        enabledRelationTypes={enabledRelationTypes}
+      />
 
       {/* Grid helper (optional, for orientation) */}
       <gridHelper args={[1000, 100, '#444444', '#222222']} position={[0, -5, 0]} />
+
+      {/* OrbitControls - Mouse controls like Map3D */}
+      <OrbitControls
+        target={physics.position}
+        enableDamping={true}
+        dampingFactor={0.05}
+        minDistance={20}
+        maxDistance={200}
+        enablePan={true}
+        enableRotate={true}
+        enableZoom={true}
+        mouseButtons={{
+          LEFT: 0,   // ROTATE
+          MIDDLE: 1, // DOLLY (zoom)
+          RIGHT: 2,  // PAN
+        }}
+      />
     </>
   );
 };
@@ -199,37 +218,30 @@ export const Navigation: React.FC<NavigationProps> = ({
 }) => {
   const [randomSpawn, setRandomSpawn] = useState<Vector3 | null>(null);
   const [galaxyPositions, setGalaxyPositions] = useState<Map<string, Vector3>>(new Map());
-  const [showLinks, setShowLinks] = useState(false);
+  const [showLinks, setShowLinks] = useState(true);
   const { nodes: allNodes } = useLemmaGraph();
+
+  // Relation filtering from store
+  const enabledRelationTypes = useAppStore((s) => s.enabledRelationTypes);
+  const toggleRelationType = useAppStore((s) => s.toggleRelationType);
+  const resetRelationFilter = useAppStore((s) => s.resetRelationFilter);
 
   // Load galaxy positions from universe.json
   useEffect(() => {
     fetch('/universe.json')
       .then(res => res.json())
       .then(data => {
-        console.log('[Navigation] Loading universe.json for galaxy positions...');
-
-        // Initialize GalaxyDataService
-        galaxyDataService.initialize({
-          galaxies: data.galaxies,
-          stars: data.stars,
-          bundles: data.bundles,
-          galaxyMembersMap: new Map(),
-          starIndex: new Map(),
-        });
-
-        // Extract galaxy positions with same scaling as WordNode (x5)
+        // Extract galaxy positions with same scaling as WordNode (x10)
         const positions = new Map<string, Vector3>();
-        if (data.galaxies && data.galaxies.nodes) {
-          data.galaxies.nodes.forEach((galaxy: any) => {
+        if (data.galaxies && Array.isArray(data.galaxies)) {
+          data.galaxies.forEach((galaxy: any) => {
             positions.set(
               galaxy.id,
-              new Vector3(galaxy.x * 5, galaxy.y * 5, galaxy.z * 5)
+              new Vector3(galaxy.x * 10, galaxy.y * 10, galaxy.z * 10)
             );
           });
         }
 
-        console.log(`[Navigation] Loaded ${positions.size} galaxy positions`);
         setGalaxyPositions(positions);
       })
       .catch(error => {
@@ -253,8 +265,6 @@ export const Navigation: React.FC<NavigationProps> = ({
         )
       );
       setRandomSpawn(spawnPos);
-      console.log(`[Navigation] Spawning near word "${randomWord.word}" at position (${spawnPos.x.toFixed(1)}, ${spawnPos.y.toFixed(1)}, ${spawnPos.z.toFixed(1)}), distance ${offset.toFixed(1)}`);
-      console.log(`[Navigation] Word position: (${randomWord.position.x.toFixed(1)}, ${randomWord.position.y.toFixed(1)}, ${randomWord.position.z.toFixed(1)})`);
     }
   }, [allNodes, randomSpawn]);
 
@@ -270,7 +280,7 @@ export const Navigation: React.FC<NavigationProps> = ({
     <div style={{ width, height, position: 'relative', background: '#111' }}>
       <Canvas
         camera={{
-          position: [randomSpawn.x, randomSpawn.y + 15, randomSpawn.z + 20],
+          position: [randomSpawn.x, randomSpawn.y + 20, randomSpawn.z + 27],
           fov: 60,
         }}
       >
@@ -287,10 +297,13 @@ export const Navigation: React.FC<NavigationProps> = ({
         position="top-left"
         controls={[
           { keys: 'WASD / ↑↓←→', description: 'Déplacer' },
-          { keys: 'Espace', description: 'Monter' },
+          { keys: 'E', description: 'Monter' },
           { keys: 'Ctrl', description: 'Descendre' },
+          { keys: 'Espace', description: 'Arrêter' },
           { keys: 'Shift', description: 'Boost' },
-          { keys: 'Souris', description: 'Regarder' },
+          { keys: 'Clic gauche + glisser', description: 'Rotation caméra' },
+          { keys: 'Molette', description: 'Zoom' },
+          { keys: 'Clic droit + glisser', description: 'Pan caméra' },
         ]}
       >
         {/* Toggle for word links */}
@@ -316,6 +329,13 @@ export const Navigation: React.FC<NavigationProps> = ({
             <span>Afficher les liens</span>
           </label>
         </div>
+
+        {/* Relation type filters */}
+        <RelationFilter
+          enabledTypes={enabledRelationTypes}
+          onToggle={toggleRelationType}
+          onReset={resetRelationFilter}
+        />
       </ControlPanel>
 
     </div>

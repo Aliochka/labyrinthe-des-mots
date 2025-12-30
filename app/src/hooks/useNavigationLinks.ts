@@ -24,13 +24,13 @@ export interface NavigationEdge {
  *
  * @param nodes - All word nodes from useLemmaGraph
  * @param playerPosition - Current player position
- * @param maxDistance - Maximum distance to compute edges (default: 50)
+ * @param maxDistance - Maximum distance to compute edges (default: 500)
  * @returns Array of edges between nearby nodes
  */
 export function useNavigationLinks(
   nodes: WordNode[],
   playerPosition: Vector3,
-  maxDistance: number = 50
+  maxDistance: number = 500
 ): NavigationEdge[] {
   // Throttling: store last computed position
   const lastComputePos = useRef(new Vector3());
@@ -54,7 +54,6 @@ export function useNavigationLinks(
         map.set(node.id, node);
       }
     });
-    console.log(`[useNavigationLinks] Found ${map.size} nearby nodes within ${maxDistance} units`);
     return map;
   }, [nodes, playerPosition, maxDistance]);
 
@@ -93,9 +92,6 @@ export function useNavigationLinks(
         console.warn(`[useNavigationLinks] Could not get edges for ${nodeId}:`, error);
       }
     }
-
-    const edgeCount = edgeMap.size;
-    console.log(`[useNavigationLinks] Computed ${edgeCount} edges between ${nearbyNodesMap.size} nearby nodes`);
 
     return Array.from(edgeMap.values());
   }, [nearbyNodesMap, positionKey]); // positionKey ensures throttling

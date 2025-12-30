@@ -10,6 +10,7 @@ interface WordLinksProps {
   nearbyNodes: WordNode[];
   galaxyPositions: Map<string, Vector3>;
   showLinks: boolean;
+  enabledRelationTypes: Set<string>;
 }
 
 /**
@@ -25,21 +26,24 @@ export const WordLinks: React.FC<WordLinksProps> = ({
   nearbyNodes,
   galaxyPositions,
   showLinks,
+  enabledRelationTypes,
 }) => {
   if (!showLinks) return null;
 
-  // Separate edges by type
+  // Separate edges by type and filter by enabled types
   const semanticEdges = useMemo(() =>
-    edges.filter(e => e.relationTypes.includes('SEMANTIC')),
-    [edges]
+    enabledRelationTypes.has('SEMANTIC')
+      ? edges.filter(e => e.relationTypes.includes('SEMANTIC'))
+      : [],
+    [edges, enabledRelationTypes]
   );
 
   const etymologyEdges = useMemo(() =>
-    edges.filter(e => e.relationTypes.includes('ETYMOLOGY')),
-    [edges]
+    enabledRelationTypes.has('ETYMOLOGY')
+      ? edges.filter(e => e.relationTypes.includes('ETYMOLOGY'))
+      : [],
+    [edges, enabledRelationTypes]
   );
-
-  console.log(`[WordLinks] Rendering ${semanticEdges.length} semantic, ${etymologyEdges.length} etymology edges, ${nearbyNodes.length} nearby nodes`);
 
   return (
     <group name="word-links">
@@ -58,7 +62,7 @@ const SemanticLinks: React.FC<{ edges: NavigationEdge[] }> = ({ edges }) => {
     () => new THREE.LineBasicMaterial({
       color: 0x4ecdc4, // Cyan
       transparent: true,
-      opacity: 0.2,
+      opacity: 0.18, // Slightly increased for better visibility
     }),
     []
   );
@@ -92,7 +96,7 @@ const EtymologyLinks: React.FC<{ edges: NavigationEdge[] }> = ({ edges }) => {
     () => new THREE.LineBasicMaterial({
       color: 0xff6b6b, // Red
       transparent: true,
-      opacity: 0.3,
+      opacity: 0.20, // Slightly increased for better visibility
     }),
     []
   );
@@ -120,7 +124,7 @@ const EtymologyLinks: React.FC<{ edges: NavigationEdge[] }> = ({ edges }) => {
 
 /**
  * StarTethers - Renders curved gray lines from words to their galaxy centers
- * Uses sampling to limit to ~1500 tethers for performance
+ * Uses sampling to limit to ~3000 tethers for performance (increased from 1500)
  */
 const StarTethers: React.FC<{
   nodes: WordNode[];
@@ -130,7 +134,7 @@ const StarTethers: React.FC<{
     () => new THREE.LineBasicMaterial({
       color: 0x666666, // Gray
       transparent: true,
-      opacity: 0.2,
+      opacity: 0.15, // Slightly increased for better visibility
     }),
     []
   );
@@ -159,7 +163,6 @@ const StarTethers: React.FC<{
         [], // No trail
         starIndex as any
       );
-      console.log(`[StarTethers] Sampled ${sampled.length} nodes for tethers`);
       return sampled;
     } catch (error) {
       console.error('[StarTethers] Sampling failed:', error);

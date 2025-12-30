@@ -2,8 +2,8 @@ import { useState, useRef } from 'react';
 import { Vector3 } from 'three';
 import type { Controls } from './useKeyboardControls';
 
-const ACCEL = 100; // units/s²
-const MAX_SPEED = 50; // units/s
+const ACCEL = 200; // units/s² (adjusted to match 10x scale)
+const MAX_SPEED = 100; // units/s (adjusted to match 10x scale)
 const FRICTION = 0.95; // damping coefficient
 const BOOST_MULTIPLIER = 2;
 
@@ -20,6 +20,12 @@ export function usePlayerPhysics(initialPosition: Vector3 = new Vector3(0, 0, 0)
   const update = (controls: Controls, deltaTime: number, cameraDirection: Vector3) => {
     const dt = deltaTime;
     const velocity = velocityRef.current;
+
+    // Stop command - immediately set velocity to zero
+    if (controls.stop) {
+      velocity.set(0, 0, 0);
+      return;
+    }
 
     // Calculate forward and right directions based on camera
     const forward = new Vector3(cameraDirection.x, 0, cameraDirection.z).normalize();

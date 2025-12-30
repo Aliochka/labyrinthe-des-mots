@@ -16,8 +16,8 @@ export const DEBUG_PANEL = true;
 export const SHOW_BOUNDING_BOX_HELPER = false;
 
 // ===== SAMPLING CONFIGURATION =====
-/** Target number of stars to sample for tether visualization (~5% of 66k stars) */
-export const TARGET_SAMPLE_SIZE = 1500;
+/** Target number of stars to sample for tether visualization (increased for Navigation immersive view) */
+export const TARGET_SAMPLE_SIZE = 3000;
 
 // ===== LOD (LEVEL OF DETAIL) CONFIGURATION =====
 /**
