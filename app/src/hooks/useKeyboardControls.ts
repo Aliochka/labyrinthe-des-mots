@@ -8,6 +8,7 @@ export interface Controls {
   up: boolean;
   down: boolean;
   boost: boolean;
+  stop: boolean;
 }
 
 export function useKeyboardControls(): Controls {
@@ -19,6 +20,7 @@ export function useKeyboardControls(): Controls {
     up: false,
     down: false,
     boost: false,
+    stop: false,
   });
 
   useEffect(() => {
@@ -40,8 +42,11 @@ export function useKeyboardControls(): Controls {
         case 'arrowright':
           setKeys((k) => ({ ...k, right: true }));
           break;
-        case ' ':
+        case 'e':
           setKeys((k) => ({ ...k, up: true }));
+          break;
+        case ' ':
+          setKeys((k) => ({ ...k, stop: true }));
           break;
         case 'control':
           setKeys((k) => ({ ...k, down: true }));
@@ -70,8 +75,11 @@ export function useKeyboardControls(): Controls {
         case 'arrowright':
           setKeys((k) => ({ ...k, right: false }));
           break;
-        case ' ':
+        case 'e':
           setKeys((k) => ({ ...k, up: false }));
+          break;
+        case ' ':
+          setKeys((k) => ({ ...k, stop: false }));
           break;
         case 'control':
           setKeys((k) => ({ ...k, down: false }));

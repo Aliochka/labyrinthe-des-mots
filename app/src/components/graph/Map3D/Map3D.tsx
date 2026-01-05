@@ -23,8 +23,9 @@ import { galaxyDataService } from "../../../services/GalaxyDataService";
 import { idStr, linkEndId, linkIdStable } from "./utils/idUtils";
 import { hashString } from "./utils/hashUtils";
 import { ensureIncludedNodes } from "./utils/nodeFiltering";
-import { getGalaxyColor, computeStarVisual } from "./utils/visualUtils";
+import { computeStarVisual } from "./utils/visualUtils";
 import { sampleStarsForTethers, buildTetherCurve } from "./utils/samplingUtils";
+import { galaxyColorToThree } from "../../../utils/galaxyColors";
 import { useGalaxyMaterials } from "./hooks/useGalaxyMaterials";
 import { MAX_NODES_RENDER, DEBUG_PANEL, SHOW_BOUNDING_BOX_HELPER } from "./constants";
 import { filterGraphLinks } from "../../../utils/linkFilters";
@@ -42,8 +43,9 @@ interface Props {
 // - ./utils/idUtils.ts (idStr, linkEndId, linkIdStable)
 // - ./utils/hashUtils.ts (hashString, simpleHash)
 // - ./utils/nodeFiltering.ts (ensureIncludedNodes)
-// - ./utils/visualUtils.ts (getGalaxyColor, computeGalaxyCenterVisual, computeStarVisual)
+// - ./utils/visualUtils.ts (computeGalaxyCenterVisual, computeStarVisual)
 // - ./utils/samplingUtils.ts (sampleStarsForTethers, buildTetherCurve)
+// - ../../../utils/galaxyColors.ts (galaxyColorToThree - shared color utility)
 // ================================================
 
 export default function Map3D({
@@ -172,6 +174,18 @@ export default function Map3D({
       // Garder sélection + trail même si hors sampling
       sampledStars = ensureIncludedNodes(sampledStars, stars, mustIncludeIds);
 
+      // LOG: Vérifier que tous les nodes requis sont présents
+      const sampledIds = new Set(sampledStars.map(n => idStr(n.id)));
+      const missingFromMustInclude: string[] = [];
+      for (const id of mustIncludeIds) {
+        if (!sampledIds.has(id)) {
+          missingFromMustInclude.push(id);
+        }
+      }
+      if (missingFromMustInclude.length > 0) {
+        console.warn(`[displayData] ${missingFromMustInclude.length} mustInclude nodes not found in stars:`, missingFromMustInclude);
+      }
+
       // TOUJOURS inclure TOUS les centres de galaxies (46 nodes)
       nodes = [...sampledStars, ...galaxyCenters];
       console.log(`[displayData] ${sampledStars.length} stars + ${galaxyCenters.length} galaxy centers`);
@@ -261,25 +275,69 @@ export default function Map3D({
       }
     }
 
-    if (visibleNavigationNodeIds.length < 2) return;
+    console.log(`[Map3D Path] visibleNavigationNodeIds:`, visibleNavigationNodeIds);
+    console.log(`[Map3D Path] displayNodeById size:`, displayNodeById.size);
+    console.log(`[Map3D Path] graphData available:`, !!graphData);
+
+    if (visibleNavigationNodeIds.length < 2) {
+      console.log(`[Map3D Path] Not enough nodes (${visibleNavigationNodeIds.length})`);
+      return;
+    }
 
     const points: THREE.Vector3[] = [];
+    const missingNodes: string[] = [];
+    const foundViaFallback: string[] = [];
 
     for (const nodeId of visibleNavigationNodeIds) {
       const sid = idStr(nodeId);
 
+      // Primary lookup: displayNodeById
       let n = displayNodeById.get(sid);
+
+      // Fallback 1: graphData.starIndex (O(1) lookup, contains ALL stars)
+      if (!n && graphData?.starIndex) {
+        const starNode = graphData.starIndex.get(sid);
+        if (starNode) {
+          n = {
+            id: starNode.id,
+            name: starNode.id,
+            x: starNode.x,
+            y: starNode.y,
+            z: starNode.z
+          } as GraphNode;
+          foundViaFallback.push(sid);
+        }
+      }
+
+      // Fallback 2: galaxyDataService (legacy)
       if (!n && (galaxyDataService as any)?.getNodeById) {
         n = (galaxyDataService as any).getNodeById(sid) as GraphNode | undefined;
+        if (n) foundViaFallback.push(sid);
       }
 
       if (n && n.x != null && n.y != null && (n as any).z != null) {
         points.push(new THREE.Vector3(n.x, n.y, (n as any).z));
+      } else {
+        missingNodes.push(sid);
       }
     }
 
-    if (points.length < 2) return;
+    if (foundViaFallback.length > 0) {
+      console.log(`[Map3D Path] Found ${foundViaFallback.length} nodes via fallback:`, foundViaFallback);
+    }
 
+    if (missingNodes.length > 0) {
+      console.warn(`[Map3D Path] Missing ${missingNodes.length} nodes:`, missingNodes);
+    }
+
+    console.log(`[Map3D Path] Rendering with ${points.length}/${visibleNavigationNodeIds.length} points`);
+
+    if (points.length < 2) {
+      console.warn(`[Map3D Path] Insufficient points, aborting`);
+      return;
+    }
+
+    // Build path curve
     const curve = new THREE.CatmullRomCurve3(points);
     const geom = new THREE.TubeGeometry(
       curve,
@@ -297,12 +355,14 @@ export default function Map3D({
     mesh.name = "discovery-path";
     scene.add(mesh);
 
+    console.log(`[Map3D Path] ✓ Path rendered successfully`);
+
     return () => {
       scene.remove(mesh);
       geom.dispose();
       mat.dispose();
     };
-  }, [visibleNavigationNodeIds, displayNodeById]);
+  }, [visibleNavigationNodeIds, displayNodeById, graphData]);
 
   useEffect(() => {
     const fg = fgRef.current;
@@ -1057,7 +1117,7 @@ export default function Map3D({
       const galaxyId = star?.galaxy != null ? String(star.galaxy) : undefined;
 
       if (galaxyId !== undefined && galaxyId !== 'void') {
-        color.copy(getGalaxyColor(galaxyId));
+        color.copy(galaxyColorToThree(galaxyId));
       } else {
         // Stars void : couleur par densité
         color.setHSL(0.78 - 0.3 * intensity, 1, 0.45 + 0.3 * intensity);

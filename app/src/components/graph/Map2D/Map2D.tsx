@@ -343,6 +343,7 @@ export default function Map2D({
                             selectedNode,
                             exploredIdSet,
                             displayNodes: displayData.nodes,
+                            starIndex: graphData?.starIndex ?? new Map(),
                         };
 
                         try {

@@ -62,7 +62,6 @@ export function sampleStarsForTethers(
     }
   }
 
-  console.log(`[sampling] ${sampled.length} stars sampled from ${nodes.length} total`);
   return sampled;
 }
 

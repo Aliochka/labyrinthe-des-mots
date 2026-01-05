@@ -19,7 +19,7 @@ export const GamePage: React.FC = () => {
     randomWords[Math.floor(Math.random() * randomWords.length)]
   );
 
-  // Charger le graphe universe (seulement pour Map2D et Map3D)
+  // Charger le graphe universe (lazy load mais avec cache permanent)
   const shouldLoadGraph = activeTabId === 'map2d' || activeTabId === 'map3d';
   const { graphData, isLoading: isLoadingGraph } =
     useUniverseGraph(shouldLoadGraph);

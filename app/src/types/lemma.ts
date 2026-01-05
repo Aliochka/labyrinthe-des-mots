@@ -37,6 +37,9 @@ export interface LemmaNode {
   y: number;
   z: number;
 
+  /** Galaxy (cluster) membership for color synchronization across views */
+  galaxy?: string;
+
   /** Total number of senses (synsets) for this lemma */
   senseCount: number;
 

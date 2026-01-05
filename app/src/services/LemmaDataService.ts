@@ -69,8 +69,8 @@ export class LemmaDataService {
       }
       const universe = await universeResponse.json();
 
-      // Extract positions from stars (star-level data)
-      const positionsMap = new Map<string, { x: number; y: number; z: number }>();
+      // Extract positions and galaxy membership from stars (star-level data)
+      const positionsMap = new Map<string, { x: number; y: number; z: number; galaxy: string }>();
       for (const star of universe.stars) {
         // Only validate data integrity, no filtering on galaxy membership
         // Filtering (void, visibility, play mode) happens at UI/renderer level
@@ -80,26 +80,36 @@ export class LemmaDataService {
           Number.isFinite(star?.y) &&
           Number.isFinite(star?.z)
         ) {
-          positionsMap.set(star.id, { x: star.x, y: star.y, z: star.z });
+          positionsMap.set(star.id, {
+            x: star.x,
+            y: star.y,
+            z: star.z,
+            galaxy: star.galaxy ?? 'void'  // Include galaxy membership
+          });
         }
       }
 
       console.log(`[POSITIONS] Loaded ${positionsMap.size} positions from universe.json`);
       console.log(`[POSITIONS] Test sample: a_la_fois =`, positionsMap.get('a_la_fois'));
 
-      // Index nodes with positions
+      // Index nodes with positions and galaxy membership
       for (const node of atlas.nodes) {
         const position = positionsMap.get(node.lemma);
         if (position) {
-          // Create enhanced node with positions
+          // Create enhanced node with positions and galaxy
           const enhancedNode: LemmaNode = {
             ...node,
             x: position.x,
             y: position.y,
-            z: position.z
+            z: position.z,
+            galaxy: position.galaxy
           };
           this.data!.lemmaNodes.set(node.lemma, enhancedNode);
-          this.data!.lemmaPositions.set(node.lemma, position);
+          this.data!.lemmaPositions.set(node.lemma, {
+            x: position.x,
+            y: position.y,
+            z: position.z
+          });
         } else {
           console.warn(`[WARN] No position found for lemma: ${node.lemma}`);
         }
