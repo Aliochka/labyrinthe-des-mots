@@ -1,5 +1,6 @@
 // src/store/appStore.ts
 import { create } from "zustand";
+import { Vector3 } from "three";
 import type { GraphLink } from "../types/graph";
 import { getDefaultEnabledRelations } from "../constants/relationTypes";
 
@@ -22,6 +23,10 @@ interface AppState {
     // --- nœuds visibles dans Navigation (expansion BFS) ---
     visibleNavigationNodeIds: string[];
     setVisibleNavigationNodeIds: (ids: string[]) => void;
+
+    // --- Navigation player position (persisted between view switches) ---
+    navigationPlayerPosition: Vector3 | null;
+    setNavigationPlayerPosition: (pos: Vector3) => void;
 
     // --- settings panel ---
     isSettingsOpen: boolean;
@@ -71,6 +76,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     visibleNavigationNodeIds: [],
     setVisibleNavigationNodeIds: (ids) => set({ visibleNavigationNodeIds: ids }),
+
+    navigationPlayerPosition: null,
+    setNavigationPlayerPosition: (pos) => set({ navigationPlayerPosition: pos }),
 
     isSettingsOpen: false,
     toggleSettings: () => set((state) => ({ isSettingsOpen: !state.isSettingsOpen })),

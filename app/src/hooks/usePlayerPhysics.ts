@@ -10,7 +10,7 @@ const BOOST_MULTIPLIER = 2;
 export interface PlayerPhysics {
   position: Vector3;
   velocity: Vector3;
-  update: (controls: Controls, deltaTime: number, cameraDirection: Vector3) => void;
+  update: (controls: Controls, deltaTime: number, cameraDirection: Vector3) => Vector3;
 }
 
 export function usePlayerPhysics(initialPosition: Vector3 = new Vector3(0, 0, 0)): PlayerPhysics {
@@ -24,7 +24,7 @@ export function usePlayerPhysics(initialPosition: Vector3 = new Vector3(0, 0, 0)
     // Stop command - immediately set velocity to zero
     if (controls.stop) {
       velocity.set(0, 0, 0);
-      return;
+      return position; // Return current position when stopped
     }
 
     // Calculate forward and right directions based on camera
@@ -70,6 +70,9 @@ export function usePlayerPhysics(initialPosition: Vector3 = new Vector3(0, 0, 0)
     // Update position
     const newPosition = position.clone().add(velocity.clone().multiplyScalar(dt));
     setPosition(newPosition);
+
+    // Return new position immediately for synchronous camera tracking
+    return newPosition;
   };
 
   return {

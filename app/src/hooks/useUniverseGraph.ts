@@ -17,6 +17,10 @@ interface UseUniverseGraphResult {
   error: Error | null;
 }
 
+// Cache global pour éviter de recharger les données à chaque switch de vue
+let cachedGraphData: UniverseGraphData | null = null;
+let cacheLoadingPromise: Promise<UniverseGraphData> | null = null;
+
 /**
  * Charge universe.json + lemma-graph.json une seule fois
  * et construit les index en mémoire pour performance O(1)
@@ -31,6 +35,30 @@ export function useUniverseGraph(enabled: boolean = true): UseUniverseGraphResul
   useEffect(() => {
     if (!enabled) return;
 
+    // Si déjà en cache, utiliser immédiatement
+    if (cachedGraphData) {
+      console.log('[useUniverseGraph] ✓ Utilisation du cache existant');
+      setGraphData(cachedGraphData);
+      return;
+    }
+
+    // Si un chargement est déjà en cours, s'y attacher
+    if (cacheLoadingPromise) {
+      console.log('[useUniverseGraph] Attente du chargement en cours...');
+      setIsLoading(true);
+      cacheLoadingPromise
+        .then((data) => {
+          setGraphData(data);
+          setIsLoading(false);
+        })
+        .catch((e) => {
+          setError(e);
+          setIsLoading(false);
+        });
+      return;
+    }
+
+    // Nouveau chargement
     const controller = new AbortController();
 
     const loadGraph = async () => {
@@ -61,19 +89,25 @@ export function useUniverseGraph(enabled: boolean = true): UseUniverseGraphResul
         // 2. Construire les index en mémoire (UNE SEULE FOIS)
         const data = buildUniverseGraphData(universe, lemmaGraph);
 
+        // Mettre en cache
+        cachedGraphData = data;
+        cacheLoadingPromise = null;
+
         setGraphData(data);
 
-        console.log('[useUniverseGraph] ✓ Index construits et prêts');
+        console.log('[useUniverseGraph] ✓ Index construits et mis en cache');
       } catch (e: any) {
         if (e.name === 'AbortError') return;
         console.error('[useUniverseGraph] Erreur chargement:', e);
+        cacheLoadingPromise = null;
         setError(e);
       } finally {
         setIsLoading(false);
       }
     };
 
-    loadGraph();
+    // Créer la promise de chargement
+    cacheLoadingPromise = loadGraph().then(() => cachedGraphData!);
 
     return () => {
       controller.abort();
